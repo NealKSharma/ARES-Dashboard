@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ARES Telemetry</title>
+  <link rel="icon" type="image/png" href="assets/ARES Logo.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/leaflet.css" />
+  <script src="js/chart.js"></script>
+  <script src="js/leaflet.js"></script>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <img src="assets/ARES Logo.png" alt="ARES" class="logo">
+      <span class="brand-name">ARES Telemetry</span>
+    </div>
+    <div class="clock" id="mission-clock">00:00:00</div>
+    <div class="links">
+      <span class="link down" id="server-status"><i></i>Server offline</span>
+      <span class="link down" id="tracker-status"><i></i>Tracker offline</span>
+    </div>
+  </header>
+
+  <section class="panel readout">
+    <div class="hero">
+      <div class="hero-label">Altitude</div>
+      <div class="hero-value"><span id="alt">--</span><small>ft</small></div>
+    </div>
+    <dl class="rows">
+      <div><dt>Vertical velocity</dt><dd><span id="upvel">--</span><small>ft/s</small></dd></div>
+      <div><dt>Horizontal velocity</dt><dd><span id="vel">--</span><small>ft/s</small></dd></div>
+      <div class="gap"><dt>Latitude</dt><dd id="lat">--</dd></div>
+      <div><dt>Longitude</dt><dd id="lon">--</dd></div>
+      <div class="gap"><dt>GPS fix</dt><dd id="fix">--</dd></div>
+      <div><dt>Satellites</dt><dd id="sats">--</dd></div>
+      <div class="gap"><dt>Battery</dt><dd><span id="volt">--</span><small>mV</small></dd></div>
+      <div><dt>Signal strength</dt><dd><span id="rssi">--</span><small>%</small></dd></div>
+      <div class="gap"><dt>Last packet</dt><dd id="time">--</dd></div>
+    </dl>
+  </section>
+
+  <section class="panel map-panel">
+    <div id="map"></div>
+  </section>
+
+  <section class="panel graphs">
+    <div class="graphs-head">
+      <span class="panel-title">Graphs</span>
+      <div class="controls">
+        <select id="ySelect" onchange="updateGraphDropdown()">
+          <option value="alt">Altitude (ft)</option>
+          <option value="vel">Horizontal velocity (ft/s)</option>
+          <option value="upvel">Vertical velocity (ft/s)</option>
+          <option value="volt">Battery (mV)</option>
+          <option value="rssi">Signal strength (%)</option>
+        </select>
+        <button id="addGraphBtn" onclick="createGraph()">Add graph</button>
+        <button id="clearDataBtn" onclick="clearAllData()">Clear data</button>
+      </div>
+    </div>
+    <div id="customGraphs"></div>
+  </section>
+
+  <section class="panel platforms">
+    <nav class="rocket-list" id="rocket-list"></nav>
+    <div class="rocket-detail" id="platform-content"></div>
+  </section>
+</div>
+<script src="js/app.js"></script>
+</body>
+</html>

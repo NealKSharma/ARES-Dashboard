@@ -33,3 +33,12 @@ Built with a Go backend that reads live telemetry data from a Featherweight GPS 
    ```
 
 4. Open your browser and navigate to `http://localhost:8080`.
+
+### Compiling for Production
+To create a standalone executable that you can easily double-click on launch day without needing to use the terminal:
+
+```bash
+go build -o "ARES Dashboard.exe" main.go
+```
+
+**Important:** When moving or running the compiled `ARES Dashboard.exe`, you must always ensure the `public/` folder is in the exact same directory as the `.exe`, as it contains all the necessary fonts, scripts, and layout files for the dashboard to render!

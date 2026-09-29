@@ -13,7 +13,7 @@ import (
 	"go.bug.st/serial"
 )
 
-// parsed data from the Featherweight GPS tracker
+// TelemetryData holds the parsed payload from the GPS tracker
 type TelemetryData struct {
 	Lat string `json:"lat"`
 	Lon string `json:"lon"`
@@ -41,10 +41,8 @@ var (
 )
 
 func main() {
-	// Start serial reader in a goroutine
+	// run backend tasks
 	go serialReader()
-	
-	// Start the single broadcaster goroutine
 	go handleBroadcasts()
 
 	// Handle static files
@@ -106,48 +104,63 @@ func handleBroadcasts() {
 }
 
 func serialReader() {
-	var port serial.Port
-	var err error
-
 	for {
-		if port == nil {
-			// Auto-detect port
-			ports, errList := serial.GetPortsList()
-			if errList != nil || len(ports) == 0 {
-				log.Println("No serial ports found, retrying in 5s...")
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			// Just pick the first available port for simplicity as per requirement
-			portName := ports[0]
-			fmt.Printf("Attempting to open port %s...\n", portName)
-			mode := &serial.Mode{
-				BaudRate: 115200,
-			}
-			port, err = serial.Open(portName, mode)
-			if err != nil {
-				log.Printf("Failed to open %s: %v, retrying in 5s...", portName, err)
-				time.Sleep(5 * time.Second)
-				continue
-			}
-			fmt.Printf("Successfully opened %s\n", portName)
+		ports, errList := serial.GetPortsList()
+		if errList != nil || len(ports) == 0 {
+			log.Println("No serial ports found, retrying in 5s...")
+			time.Sleep(5 * time.Second)
+			continue
 		}
 
-		scanner := bufio.NewScanner(port)
+		var activePort serial.Port
+		
+		for _, portName := range ports {
+			mode := &serial.Mode{BaudRate: 115200}
+			port, err := serial.Open(portName, mode)
+			if err != nil {
+				continue
+			}
+
+			port.SetReadTimeout(2 * time.Second)
+			scanner := bufio.NewScanner(port)
+			found := false
+
+			// test stream for valid packets
+			for i := 0; i < 5; i++ {
+				if scanner.Scan() {
+					if strings.HasPrefix(scanner.Text(), "@ ") {
+						found = true
+						break
+					}
+				}
+			}
+
+			if found {
+				fmt.Printf("Connected to %s\n", portName)
+				activePort = port
+				break
+			} else {
+				port.Close()
+			}
+		}
+
+		if activePort == nil {
+			log.Println("No active telemetry stream found, retrying in 5s...")
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		// listen until device drops
+		scanner := bufio.NewScanner(activePort)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "@ ") {
 				parseLine(line)
 			}
 		}
-		
-		if err := scanner.Err(); err != nil {
-			log.Printf("Serial read error: %v", err)
-		}
-		
-		port.Close()
-		port = nil
+
+		log.Printf("Lost connection to ARES GPS, searching for new port...")
+		activePort.Close()
 	}
 }
 

@@ -57,9 +57,25 @@ function setTrackerConnected() {
 function setTrackerDisconnected() { setLink('tracker-status', false, 'Tracker'); }
 
 let lastPacketTime = 0;
+let lastUpVel = null;
+let lastTrackerTime = null;
+
+function parseTrackerTime(tStr) {
+  if (!tStr) return null;
+  const parts = tStr.split(':');
+  if (parts.length !== 3) return null;
+  const h = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10);
+  const s = parseFloat(parts[2]);
+  return (h * 3600) + (m * 60) + s;
+}
 
 function updateUI(data) {
-  const set = (id, v) => { document.getElementById(id).textContent = v || '--'; };
+  const set = (id, v) => { 
+    const el = document.getElementById(id);
+    if (el) el.textContent = v || '--'; 
+  };
+  
   ['lat', 'lon', 'alt', 'vel', 'upvel', 'fix', 'sats', 'volt', 'rssi'].forEach(k => {
     let val = data[k];
 
@@ -78,6 +94,28 @@ function updateUI(data) {
     }
     set(k, val);
   });
+  
+  // G-Force Calculation
+  if (data.upvel && data.time) {
+    const currentTrackerTime = parseTrackerTime(data.time);
+    const currentUpVel = parseFloat(data.upvel);
+    
+    if (lastUpVel !== null && lastTrackerTime !== null && currentTrackerTime !== null && !isNaN(currentUpVel)) {
+      const dt = currentTrackerTime - lastTrackerTime;
+      if (dt > 0) {
+        const accel = (currentUpVel - lastUpVel) / dt; // ft/s^2
+        const g = accel / 32.174;
+        set('gforce', (g > 0 ? '+' : '') + g.toFixed(2));
+      }
+    }
+    if (currentTrackerTime !== null && !isNaN(currentUpVel)) {
+      // Only update last time if time actually advanced (avoid RX_NOMTK duplicates)
+      if (lastTrackerTime === null || currentTrackerTime > lastTrackerTime) {
+        lastUpVel = currentUpVel;
+        lastTrackerTime = currentTrackerTime;
+      }
+    }
+  }
   
   if (data.time || data.lat || data.rssi) {
     lastPacketTime = performance.now();

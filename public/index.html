@@ -33,13 +33,19 @@
     <dl class="rows">
       <div><dt>Vertical velocity</dt><dd><span id="upvel">--</span><small>ft/s</small></dd></div>
       <div><dt>Horizontal velocity</dt><dd><span id="vel">--</span><small>ft/s</small></dd></div>
-      <div class="gap"><dt>Latitude</dt><dd id="lat">--</dd></div>
+      <div class="gap"><dt>G-Force</dt><dd><span id="gforce">--</span><small>G</small></dd></div>
+      <div><dt>Signal strength</dt><dd><span id="rssi">--</span><small>%</small></dd></div>
+      <div class="gap"><dt>Last packet</dt><dd id="time">--</dd></div>
+    </dl>
+    
+    <div class="tactical-divider">DIAGNOSTICS</div>
+    
+    <dl class="rows diagnostics">
+      <div><dt>Latitude</dt><dd id="lat">--</dd></div>
       <div><dt>Longitude</dt><dd id="lon">--</dd></div>
       <div class="gap"><dt>GPS fix</dt><dd id="fix">--</dd></div>
       <div><dt>Satellites</dt><dd id="sats">--</dd></div>
       <div class="gap"><dt>Battery</dt><dd><span id="volt">--</span><small>mV</small></dd></div>
-      <div><dt>Signal strength</dt><dd><span id="rssi">--</span><small>%</small></dd></div>
-      <div class="gap"><dt>Last packet</dt><dd id="time">--</dd></div>
     </dl>
   </section>
 
@@ -60,7 +66,7 @@
         </select>
         <button id="addGraphBtn" onclick="createGraph()">Add graph</button>
         <button id="clearDataBtn" onclick="clearAllData()">Clear data</button>
-        <button id="tareBtn" onclick="tareAltitude()">Tare alt</button>
+        <button id="tareBtn" onclick="tareAltitude()">Tare altitude</button>
       </div>
     </div>
     <div id="customGraphs"></div>

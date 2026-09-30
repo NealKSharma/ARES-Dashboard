@@ -1,4 +1,3 @@
-// ---------- WebSocket ----------
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const wsUrl = `${protocol}//${window.location.host}/ws`;
 let socket = null;
@@ -22,7 +21,7 @@ function connect() {
 	socket.onmessage = (event) => {
 		try {
 			const data = JSON.parse(event.data);
-			if (data.lat || data.alt || data.rssi) setTrackerConnected();
+			if (!data.snapshot && (data.lat || data.alt || data.rssi)) setTrackerConnected();
 
 			if (data.rssi) {
 				const rssiVal = parseFloat(data.rssi);
@@ -31,9 +30,14 @@ function connect() {
 				else if (rssiVal > -120) pct = Math.round(((rssiVal + 120) / 70) * 100);
 				data.rssi = pct.toString();
 			}
-			updateUI(data);
-			updateMapPosition(data);
-			updateCustomGraphs(data);
+			try { updateUI(data); } catch(e) { console.error("UI error:", e); }
+			try { updateMapPosition(data); } catch(e) { console.error("Map error:", e); }
+			try { 
+				if (data.time !== window.lastGraphTime && !data.snapshot) {
+					updateCustomGraphs(data); 
+					window.lastGraphTime = data.time;
+				}
+			} catch(e) { console.error("Graph error:", e); }
 		} catch (e) {
 			console.error('Error parsing telemetry:', e);
 		}
@@ -44,9 +48,11 @@ window.altOffset = 0;
 window.lastRawAlt = 0;
 
 function tareAltitude() {
+	if (flightPhase !== "PAD" && flightPhase !== "LANDED") return;
 	window.altOffset = window.lastRawAlt;
-	// Update UI immediately with 0
 	document.getElementById('alt').textContent = "0";
+	maxAlt = 0;
+	document.getElementById('max-alt').textContent = "0";
 }
 
 function setTrackerConnected() {
@@ -59,6 +65,14 @@ function setTrackerDisconnected() { setLink('tracker-status', false, 'Tracker');
 let lastPacketTime = 0;
 let lastUpVel = null;
 let lastTrackerTime = null;
+
+let maxAlt = -Infinity;
+let maxVel = 0;
+let maxUpVel = -Infinity;
+let maxG = -Infinity;
+let currentG = null;
+let flightPhase = "PAD";
+let ignitionTime = null;
 
 function parseTrackerTime(tStr) {
   if (!tStr) return null;
@@ -73,7 +87,13 @@ function parseTrackerTime(tStr) {
 function updateUI(data) {
   const set = (id, v) => { 
     const el = document.getElementById(id);
-    if (el) el.textContent = v || '--'; 
+    if (el) {
+      if (!v) {
+        el.textContent = '--';
+      } else {
+        el.textContent = v;
+      }
+    }
   };
   
   ['lat', 'lon', 'alt', 'vel', 'upvel', 'fix', 'sats', 'volt', 'rssi'].forEach(k => {
@@ -83,33 +103,60 @@ function updateUI(data) {
       const rawAlt = parseFloat(val);
       if (!isNaN(rawAlt)) {
         window.lastRawAlt = rawAlt;
-        val = (rawAlt - window.altOffset).toString();
-        data.alt = val; // ensure graphs use the tared value
+        val = parseFloat((rawAlt - window.altOffset).toFixed(2)).toString();
+        data.alt = val;
+        
+        const taredAlt = parseFloat(val);
+        if (taredAlt > maxAlt) {
+          maxAlt = taredAlt;
+          set('max-alt', maxAlt.toString());
+        }
+      }
+    }
+
+    if (k === 'vel' && val) {
+      const v = parseFloat(val);
+      if (!isNaN(v) && v > maxVel) {
+        maxVel = v;
+        set('max-vel', maxVel.toString());
+      }
+    }
+    
+    if (k === 'upvel' && val) {
+      const uv = parseFloat(val);
+      if (!isNaN(uv) && uv > maxUpVel) {
+        maxUpVel = uv;
+        set('max-upvel', maxUpVel.toString());
       }
     }
 
     if (val && (k === 'lat' || k === 'lon')) {
       const num = parseFloat(val);
-      if (!isNaN(num)) val = parseFloat(num.toFixed(5)).toString(); // Max 5 decimal places, strips trailing zeros
+      if (!isNaN(num)) val = parseFloat(num.toFixed(5)).toString();
     }
     set(k, val);
   });
   
-  // G-Force Calculation
   if (data.upvel && data.time) {
     const currentTrackerTime = parseTrackerTime(data.time);
     const currentUpVel = parseFloat(data.upvel);
     
     if (lastUpVel !== null && lastTrackerTime !== null && currentTrackerTime !== null && !isNaN(currentUpVel)) {
-      const dt = currentTrackerTime - lastTrackerTime;
-      if (dt > 0) {
-        const accel = (currentUpVel - lastUpVel) / dt; // ft/s^2
-        const g = accel / 32.174;
-        set('gforce', (g > 0 ? '+' : '') + g.toFixed(2));
+      let dt = currentTrackerTime - lastTrackerTime;
+      if (dt < 0 && dt > -86400) dt += 86400; // handle UTC midnight wrap
+      
+      if (dt > 0 && dt < 2.0) { // ignore gaps larger than 2 seconds
+        const accel = (currentUpVel - lastUpVel) / dt;
+        currentG = (accel / 32.174) + 1.0;
+        set('gforce', (currentG > 0 ? '+' : '') + currentG.toFixed(2));
+        
+        if (currentG > maxG) {
+          maxG = currentG;
+          set('max-g', (maxG > 0 ? '+' : '') + maxG.toFixed(2));
+        }
       }
     }
     if (currentTrackerTime !== null && !isNaN(currentUpVel)) {
-      // Only update last time if time actually advanced (avoid RX_NOMTK duplicates)
       if (lastTrackerTime === null || currentTrackerTime > lastTrackerTime) {
         lastUpVel = currentUpVel;
         lastTrackerTime = currentTrackerTime;
@@ -117,8 +164,14 @@ function updateUI(data) {
     }
   }
   
-  if (data.time || data.lat || data.rssi) {
+  if ((data.time || data.lat || data.rssi) && !data.snapshot) {
     lastPacketTime = performance.now();
+  }
+
+  const taredAlt = parseFloat(data.alt);
+  const upvel = parseFloat(data.upvel);
+  if (!isNaN(taredAlt) && !isNaN(upvel) && currentG !== null) {
+    checkFlightPhase(taredAlt, upvel, currentG);
   }
 }
 
@@ -129,7 +182,6 @@ setInterval(() => {
   }
 }, 100);
 
-// ---------- Map ----------
 const START = [42.0266, -93.6465];
 const map = L.map('map', { zoomControl: false }).setView(START, 16);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -148,7 +200,7 @@ let rocketMarker = null;
 function updateMapPosition(data) {
   const lat = parseFloat(data.lat);
   const lon = parseFloat(data.lon);
-  if (isNaN(lat) || isNaN(lon)) return;
+  if (isNaN(lat) || isNaN(lon) || (lat === 0 && lon === 0)) return;
 
   const last = rocketPath[rocketPath.length - 1];
   if (last && last[0] === lat && last[1] === lon) return;
@@ -166,12 +218,12 @@ function updateMapPosition(data) {
   }
 }
 
-// ---------- Graphs ----------
 const customGraphs = [];
 const palette = ['#ff6a3d', '#5ec8e5', '#e9c46a', '#7fd48b', '#c39bd3'];
 Chart.defaults.color = '#8291a1';
 Chart.defaults.font.family = "'Barlow Semi Condensed', sans-serif";
 let timeIndex = 0;
+let graphCounter = 0;
 
 function updateGraphDropdown() {
   const sel = document.getElementById('ySelect');
@@ -213,7 +265,8 @@ function createGraph(key, label) {
   if (customGraphs.some(g => g.yKey === yKey)) return;
 
   const yLabel = label || sel.options[sel.selectedIndex].text.replace('✓ ', '');
-  const color = palette[customGraphs.length % palette.length];
+  const color = palette[graphCounter % palette.length];
+  graphCounter++;
 
   const box = document.createElement('div');
   box.className = 'graph-box';
@@ -268,7 +321,8 @@ function updateCustomGraphs(data) {
   });
 }
 
-function clearAllData() {
+function clearAllData(override = false) {
+  if (!override && flightPhase !== "PAD" && flightPhase !== "LANDED") return;
   customGraphs.forEach(({ chart }) => {
     chart.data.labels = [];
     chart.data.datasets[0].data = [];
@@ -276,6 +330,23 @@ function clearAllData() {
   });
   rocketPath.length = 0;
   pathLine.setLatLngs(rocketPath);
+  
+  maxAlt = -Infinity;
+  maxVel = 0;
+  maxUpVel = -Infinity;
+  maxG = -Infinity;
+  document.getElementById('max-alt').textContent = '--';
+  document.getElementById('max-vel').textContent = '--';
+  document.getElementById('max-upvel').textContent = '--';
+  document.getElementById('max-g').textContent = '--';
+  
+  flightPhase = "PAD";
+  ignitionTime = null;
+  window.landedTime = null;
+  padRawAlt = 0;
+  timeIndex = 0;
+  document.getElementById('flight-phase').textContent = "PAD";
+  document.getElementById('flight-phase').classList.remove('active-phase');
 }
 
 connect();
@@ -283,14 +354,61 @@ createGraph('alt', 'Altitude (ft)');
 createGraph('upvel', 'Vertical velocity (ft/s)');
 createGraph('rssi', 'Signal strength (%)');
 
-// ---------- Mission clock ----------
 function updateClock() {
-  document.getElementById('mission-clock').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  if (flightPhase === "PAD" || !ignitionTime) {
+    document.getElementById('mission-clock').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  } else {
+    let elapsed = Math.floor((performance.now() - ignitionTime) / 1000);
+    if (flightPhase === "LANDED" && window.landedTime) {
+      elapsed = Math.floor((window.landedTime - ignitionTime) / 1000);
+    }
+    const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+    const s = String(elapsed % 60).padStart(2, '0');
+    document.getElementById('mission-clock').textContent = `T+ ${m}:${s}`;
+  }
 }
-setInterval(updateClock, 1000);
+setInterval(updateClock, 250);
 updateClock();
 
-// ---------- Rockets ----------
+let padRawAlt = 0;
+
+function checkFlightPhase(taredAlt, upvel, g) {
+  if (flightPhase === "PAD") {
+    if (g > 3.0 || upvel > 60) {
+      clearAllData(); 
+      padRawAlt = window.lastRawAlt;
+      
+      flightPhase = "BOOST";
+      ignitionTime = performance.now();
+      
+      const badge = document.getElementById('flight-phase');
+      badge.textContent = flightPhase;
+      badge.classList.add('active-phase');
+    }
+  } else if (flightPhase === "BOOST") {
+    if (g < 1.0 && upvel > 50) flightPhase = "COAST";
+  } else if (flightPhase === "COAST") {
+    if (upvel < 0) flightPhase = "APOGEE";
+  } else if (flightPhase === "APOGEE") {
+    if (upvel < -40) flightPhase = "DROGUE";
+    else if (upvel > -40 && upvel < -5 && (maxAlt - taredAlt) > 300) flightPhase = "MAIN";
+  } else if (flightPhase === "DROGUE") {
+    if (upvel > -35 && upvel < -5) flightPhase = "MAIN";
+    else if (Math.abs(upvel) < 5 && (window.lastRawAlt - padRawAlt) < 500) {
+      flightPhase = "LANDED";
+      window.landedTime = performance.now();
+      document.getElementById('flight-phase').classList.remove('active-phase');
+    }
+  } else if (flightPhase === "MAIN") {
+    if (Math.abs(upvel) < 5 && (window.lastRawAlt - padRawAlt) < 500) {
+      flightPhase = "LANDED";
+      window.landedTime = performance.now();
+      document.getElementById('flight-phase').classList.remove('active-phase');
+    }
+  }
+  document.getElementById('flight-phase').textContent = flightPhase;
+}
+
 const MAX_ALT = 15000;
 const rockets = {
   harmonia: {
@@ -310,14 +428,14 @@ const rockets = {
   scylla: {
     name: 'Scylla', note: '142.77 m/s',
     height: '~4.1', structure: '3D printed',
-    alt: 4200, altText: '~4,200', altMetric: '',
+    alt: 4200, altText: '~4,200', altMetric: '~1.28 km',
     flight: '110', apogee: '~16 s',
-    payload: 'Budget-friendly (18cm L × 7cm D)'
+    payload: 'Modular (18cm L × 7cm D)'
   },
   phobos: {
     name: 'Phobos', note: 'Our First Rocket',
     height: '10+', structure: 'Fiber glass',
-    alt: 7400, altText: '~7,400', altMetric: '~2.2 km',
+    alt: 7400, altText: '~7,400', altMetric: '~2.26 km',
     flight: '248', apogee: '~21 s',
     payload: 'EM pass-through (~55cm L × 15cm D)'
   }

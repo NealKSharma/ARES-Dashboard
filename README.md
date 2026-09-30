@@ -12,19 +12,19 @@ Built with a Go backend that reads live telemetry data from a Featherweight GPS 
 ## Getting Started
 
 ### Prerequisites
-- [Go](https://golang.org/doc/install) (1.20+)
+- [Go](https://golang.org/doc/install) (1.21+)
 - A Featherweight GPS tracker connected via USB (optional for viewing, required for live data).
 
 ### Running Locally
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/ARES_Dashboard.git
+   git clone https://github.com/ARES-Rocketry/ARES_Dashboard.git
    cd ARES_Dashboard
    ```
 
 2. Download Go dependencies:
    ```bash
-   go mod download
+   go mod tidy
    ```
 
 3. Start the server:
@@ -41,19 +41,20 @@ If you are troubleshooting a hardware connection or want to view the raw data co
   ```bash
   go run main.go --debug=gps
   ```
-  *Only prints valid, human-readable telemetry packets (filters out binary garbage).*
+  *Only prints lines starting with `@` (valid GPS telemetry strings).*
 
 - **Raw Stream Mode**
   ```bash
   go run main.go --debug=all
   ```
-  *Prints absolutely every byte coming over the USB port.*
+  *Prints every line received from the serial scanner.*
 
 ### Compiling for Production
-To create a standalone executable that you can easily double-click on launch day without needing to use the terminal:
+To create a standalone executable for field use on launch day:
 
 ```bash
 go build -o "ARES Dashboard.exe" main.go
 ```
 
-**Important:** When moving or running the compiled `ARES Dashboard.exe`, you must always ensure the `public/` folder is in the exact same directory as the `.exe`, as it contains all the necessary fonts, scripts, and layout files for the dashboard to render!
+Thanks to the new `//go:embed` implementation, the `public/` folder (HTML, CSS, JS) is entirely compiled directly into the binary! 
+You can take `ARES Dashboard.exe` and drop it directly onto the desktop of any field laptop—no other files or folders are required. Flight logs will automatically generate in a `logs/` folder right next to wherever the executable is run.

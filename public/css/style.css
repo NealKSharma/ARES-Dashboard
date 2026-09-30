@@ -76,11 +76,35 @@ body {
   font-size: 19px;
 }
 
+.mission-status {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.phase-badge {
+  font-family: var(--ui);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  letter-spacing: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+}
+
+.phase-badge.active-phase {
+  background: var(--fire);
+  color: #fff;
+  box-shadow: 0 0 10px rgba(255, 106, 61, 0.4);
+}
+
 .clock {
   font-family: var(--num);
-  font-size: 26px;
+  font-size: 24px;
+  color: var(--ice);
   font-weight: 500;
-  letter-spacing: 2px;
+  letter-spacing: 1px;
 }
 
 .links {
@@ -117,35 +141,72 @@ body {
   padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-.hero {
-  background: #0f151c;
-  margin: -14px -16px 12px;
-  padding: 14px 16px 12px;
-  border-radius: 3px 3px 0 0;
-  border-bottom: 2px solid var(--fire);
-}
-
-.hero-label {
-  color: var(--muted);
-}
-
-.hero-value {
-  font-family: var(--num);
-  font-size: 58px;
-  font-weight: 500;
-  line-height: 1.1;
-  color: var(--fire);
+/* Tactical Table */
+.tactical-table {
   display: flex;
+  flex-direction: column;
+  margin: 0 -16px;
+}
+
+.table-header {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 20px;
+  padding: 10px 16px;
+  background: #0b0f14;
+  border-bottom: 1px solid rgba(94, 214, 242, 0.2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+.table-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 20px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   align-items: center;
 }
 
-.hero-value small {
-  font-size: 20px;
+.t-right {
+  text-align: right;
+}
+
+.t-label {
   color: var(--muted);
-  margin-left: 6px;
+  font-size: 14px;
+}
+
+.t-live {
+  font-family: var(--num);
+  font-size: 22px;
+  color: #fff;
+  text-align: right;
+  font-weight: 500;
+}
+
+.t-peak {
+  font-family: var(--num);
+  font-size: 17px;
+  color: var(--ice);
+  text-align: right;
+}
+
+.t-peak.muted {
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+.t-live small, .t-peak small {
+  font-size: 12px;
+  margin-left: 5px;
+  color: var(--muted);
 }
 
 .rows {
@@ -236,27 +297,28 @@ dd small {
 
 /* tactical split */
 .tactical-divider {
-  margin: 20px 0 10px 0;
+  margin: 30px 0 10px 0;
   padding-bottom: 5px;
   border-bottom: 1px solid var(--line);
   color: var(--ice);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 2px;
   text-transform: uppercase;
 }
 
 .diagnostics dt {
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .diagnostics dd {
-  font-size: 15px;
+  font-size: 17px;
   color: var(--muted);
+  font-weight: 500;
 }
 
 .diagnostics dd small {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 /* graphs */
@@ -268,6 +330,7 @@ dd small {
 
 .graphs-head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 8px;
@@ -284,6 +347,7 @@ dd small {
 
 .controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -526,4 +590,9 @@ button:hover {
     grid-template-columns: 1fr 1fr;
   }
 
+}
+
+@media (max-height: 850px) {
+  .table-row { padding: 8px 16px; }
+  .app { grid-template-rows: 48px minmax(0, 1fr) 160px; }
 }

@@ -18,7 +18,10 @@
       <img src="assets/ARES Logo.png" alt="ARES" class="logo">
       <span class="brand-name">ARES Telemetry</span>
     </div>
-    <div class="clock" id="mission-clock">00:00:00</div>
+    <div class="mission-status">
+      <span class="phase-badge pad-phase" id="flight-phase">PAD</span>
+      <span class="clock" id="mission-clock">00:00:00</span>
+    </div>
     <div class="links">
       <span class="link down" id="server-status"><i></i>Server offline</span>
       <span class="link down" id="tracker-status"><i></i>Tracker offline</span>
@@ -26,22 +29,44 @@
   </header>
 
   <section class="panel readout">
-    <div class="hero">
-      <div class="hero-label">Altitude</div>
-      <div class="hero-value"><span id="alt">--</span><small>ft</small></div>
+    <div class="tactical-table">
+      <div class="table-header">
+        <span>PARAMETER</span>
+        <span class="t-right">LIVE VALUE</span>
+        <span class="t-right">PEAK VALUE</span>
+      </div>
+      
+      <div class="table-row">
+        <span class="t-label">Altitude</span>
+        <span class="t-live"><span id="alt">--</span><small>ft</small></span>
+        <span class="t-peak"><span id="max-alt">--</span><small>ft</small></span>
+      </div>
+      
+      <div class="table-row">
+        <span class="t-label">Vert Velocity</span>
+        <span class="t-live"><span id="upvel">--</span><small>ft/s</small></span>
+        <span class="t-peak"><span id="max-upvel">--</span><small>ft/s</small></span>
+      </div>
+
+      <div class="table-row">
+        <span class="t-label">Horiz Velocity</span>
+        <span class="t-live"><span id="vel">--</span><small>ft/s</small></span>
+        <span class="t-peak"><span id="max-vel">--</span><small>ft/s</small></span>
+      </div>
+
+      <div class="table-row">
+        <span class="t-label">Net Accel</span>
+        <span class="t-live"><span id="gforce">--</span><small>G</small></span>
+        <span class="t-peak"><span id="max-g">--</span><small>G</small></span>
+      </div>
     </div>
-    <dl class="rows">
-      <div><dt>Vertical velocity</dt><dd><span id="upvel">--</span><small>ft/s</small></dd></div>
-      <div><dt>Horizontal velocity</dt><dd><span id="vel">--</span><small>ft/s</small></dd></div>
-      <div class="gap"><dt>G-Force</dt><dd><span id="gforce">--</span><small>G</small></dd></div>
-      <div><dt>Signal strength</dt><dd><span id="rssi">--</span><small>%</small></dd></div>
-      <div class="gap"><dt>Last packet</dt><dd id="time">--</dd></div>
-    </dl>
-    
+
     <div class="tactical-divider">DIAGNOSTICS</div>
     
     <dl class="rows diagnostics">
-      <div><dt>Latitude</dt><dd id="lat">--</dd></div>
+      <div><dt>Signal strength</dt><dd><span id="rssi">--</span><small>%</small></dd></div>
+      <div><dt>Last packet</dt><dd id="time">--</dd></div>
+      <div class="gap"><dt>Latitude</dt><dd id="lat">--</dd></div>
       <div><dt>Longitude</dt><dd id="lon">--</dd></div>
       <div class="gap"><dt>GPS fix</dt><dd id="fix">--</dd></div>
       <div><dt>Satellites</dt><dd id="sats">--</dd></div>

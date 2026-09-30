@@ -2,62 +2,66 @@ package main
 
 import (
 	"bufio"
+	"embed"
+	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
-	"flag"
 	"strings"
 	"sync"
 	"time"
+	"path/filepath"
 
 	"github.com/gorilla/websocket"
 	"go.bug.st/serial"
 )
 
-// TelemetryData holds the parsed payload from the GPS tracker
+//go:embed public
+var publicFS embed.FS
+
 type TelemetryData struct {
-	Lat string `json:"lat"`
-	Lon string `json:"lon"`
-	Alt string `json:"alt"`
-	Vel string `json:"vel"`
-	UpVel string `json:"upvel"`
-	Sats string `json:"sats"`
-	Fix string `json:"fix"`
-	RSSI string `json:"rssi"`
-	Volt string `json:"volt"`
-	Time string `json:"time"`
+	Lat      string `json:"lat"`
+	Lon      string `json:"lon"`
+	Alt      string `json:"alt"`
+	Vel      string `json:"vel"`
+	UpVel    string `json:"upvel"`
+	Sats     string `json:"sats"`
+	Fix      string `json:"fix"`
+	RSSI     string `json:"rssi"`
+	Volt     string `json:"volt"`
+	Time     string `json:"time"`
+	Snapshot bool   `json:"snapshot,omitempty"`
 }
 
-var (
-	currentData TelemetryData
-	dataMutex   sync.RWMutex
-	clients     = make(map[*websocket.Conn]bool)
-	clientsMu   sync.Mutex
-	broadcast   = make(chan TelemetryData, 100)
-	csvChan     = make(chan TelemetryData, 2000)
-	debugMode   string
-	upgrader    = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
-	}
-)
+var currentData TelemetryData
+var dataMutex sync.RWMutex
+var clients = make(map[*websocket.Conn]bool)
+var clientsMu sync.Mutex
+var broadcast = make(chan TelemetryData, 100)
+var csvChan = make(chan TelemetryData, 2000)
+var debugMode string
+var portFlag string
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
 
 func main() {
 	flag.StringVar(&debugMode, "debug", "", "Debug mode: 'all' (raw stream) or 'gps' (telemetry packets only)")
+	flag.StringVar(&portFlag, "port", "", "Specific COM port to listen on (e.g., COM3). If empty, auto-scans all ports.")
 	flag.Parse()
 
-	// run backend tasks
 	go serialReader()
 	go handleBroadcasts()
 	go csvLogger()
 
-	// Handle static files
-	fs := http.FileServer(http.Dir("./public"))
-	http.Handle("/", fs)
+	sub, _ := fs.Sub(publicFS, "public")
+	http.Handle("/", http.FileServer(http.FS(sub)))
 
-	// Handle WebSocket connections
 	http.HandleFunc("/ws", handleWebSocket)
 
 	port := ":8080"
@@ -74,19 +78,21 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	dataMutex.RLock()
+	data := currentData
+	dataMutex.RUnlock()
+	
+	data.Snapshot = true
+	// Write the snapshot FIRST before registering to the broadcaster to prevent concurrent writes
+	conn.WriteJSON(data)
+
 	clientsMu.Lock()
 	clients[conn] = true
 	clientsMu.Unlock()
 
-	// Send initial state
-	dataMutex.RLock()
-	data := currentData
-	dataMutex.RUnlock()
-	conn.WriteJSON(data)
-
-	// Listen for close
 	for {
-		if _, _, err := conn.ReadMessage(); err != nil {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
 			clientsMu.Lock()
 			delete(clients, conn)
 			clientsMu.Unlock()
@@ -99,28 +105,43 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 func handleBroadcasts() {
 	for data := range broadcast {
 		clientsMu.Lock()
+		activeClients := make([]*websocket.Conn, 0, len(clients))
 		for conn := range clients {
-			conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-			err := conn.WriteJSON(data)
-			if err != nil {
-				conn.Close()
-				delete(clients, conn)
-			}
+			activeClients = append(activeClients, conn)
 		}
 		clientsMu.Unlock()
+
+		for _, conn := range activeClients {
+			conn.SetWriteDeadline(time.Now().Add(1 * time.Second))
+			err := conn.WriteJSON(data)
+			if err != nil {
+				clientsMu.Lock()
+				if clients[conn] {
+					conn.Close()
+					delete(clients, conn)
+				}
+				clientsMu.Unlock()
+			}
+		}
 	}
 }
 
 func csvLogger() {
 	var buffer []TelemetryData
 	ticker := time.NewTicker(5 * time.Second)
+
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Printf("Failed to get executable path: %v", err)
+		return
+	}
+	logDir := filepath.Join(filepath.Dir(exePath), "logs")
 	
-	logDir := "logs"
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		log.Printf("Failed to create logs directory: %v", err)
 	}
-	
-	filename := fmt.Sprintf("%s/ARES_FlightLog_%s.csv", logDir, time.Now().Format("2006-01-02_15-04-05"))
+
+	filename := filepath.Join(logDir, fmt.Sprintf("ARES_FlightLog_%s.csv", time.Now().Format("2006-01-02_15-04-05")))
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("Failed to create CSV log: %v", err)
@@ -129,6 +150,7 @@ func csvLogger() {
 	defer file.Close()
 
 	file.WriteString("Time,Latitude,Longitude,Altitude(ft),Velocity(ft/s),UpVel(ft/s),Satellites,Fix,RSSI,Battery(mV)\n")
+	file.Sync()
 
 	for {
 		select {
@@ -157,8 +179,19 @@ var (
 
 func serialReader() {
 	for {
-		ports, errList := serial.GetPortsList()
-		if errList == nil && len(ports) > 0 {
+		var ports []string
+		if portFlag != "" {
+			ports = []string{portFlag}
+		} else {
+			var errList error
+			ports, errList = serial.GetPortsList()
+			if errList != nil {
+				time.Sleep(3 * time.Second)
+				continue
+			}
+		}
+
+		if len(ports) > 0 {
 			activePortsMu.Lock()
 			for _, portName := range ports {
 				if !activePorts[portName] {
@@ -193,12 +226,15 @@ func handlePort(portName string) {
 	defer port.Close()
 
 	scanner := bufio.NewScanner(port)
+	buf := make([]byte, 1024*1024) // 1MB buffer
+	scanner.Buffer(buf, 1024*1024)
+
 	firstPacket := true
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		isTelemetry := strings.HasPrefix(line, "@ ") || strings.HasPrefix(line, "@")
-		
+
 		if debugMode == "all" {
 			fmt.Printf("[LIVE-RAW %s] %s\n", portName, line)
 		} else if debugMode == "gps" && isTelemetry {
@@ -213,6 +249,10 @@ func handlePort(portName string) {
 			parseLine(line)
 		}
 	}
+	
+	if err := scanner.Err(); err != nil {
+		log.Printf("Scanner error on %s: %v", portName, err)
+	}
 
 	if !firstPacket {
 		log.Printf("Lost connection to ARES Tracker on %s\n", portName)
@@ -226,24 +266,26 @@ func parseLine(line string) {
 	}
 
 	packetType := parts[1]
-	
+
 	dataMutex.Lock()
 	defer dataMutex.Unlock()
 	updated := false
 
 	if packetType == "GPS_STAT" {
-		// Example: @ GPS_STAT 203 2020 11 15 01:20:21.986 CRC_OK TRK ... Alt 5655 lt 39.55612 ln -105.1032 Vel 0 -155 0 Fix 3 # 9
-		currentData.Time = extractVal(parts, 6) // usually the time
+		currentData.Time = extractVal(parts, indexOf(parts, "Time")+1)
+		if currentData.Time == "" { // fallback if "Time" key isn't explicitly printed
+			currentData.Time = extractVal(parts, 6)
+		}
 		currentData.Alt = extractAfter(parts, "Alt")
 		currentData.Lat = extractAfter(parts, "lt")
 		currentData.Lon = extractAfter(parts, "ln")
-		
+
 		velIndex := indexOf(parts, "Vel")
 		if velIndex != -1 && velIndex+3 < len(parts) {
 			currentData.Vel = parts[velIndex+1]
 			currentData.UpVel = parts[velIndex+3]
 		}
-		
+
 		currentData.Fix = extractAfter(parts, "Fix")
 		currentData.Sats = extractAfter(parts, "#")
 		updated = true
@@ -258,9 +300,8 @@ func parseLine(line string) {
 		select {
 		case broadcast <- currentData:
 		default:
-			// Channel full, skip to avoid blocking serial reader
 		}
-		
+
 		select {
 		case csvChan <- currentData:
 		default:

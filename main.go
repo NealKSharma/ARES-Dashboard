@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"flag"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +35,8 @@ var (
 	clients     = make(map[*websocket.Conn]bool)
 	clientsMu   sync.Mutex
 	broadcast   = make(chan TelemetryData, 100)
+	csvChan     = make(chan TelemetryData, 2000)
+	debugMode   string
 	upgrader    = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
 			return true
@@ -41,9 +45,13 @@ var (
 )
 
 func main() {
+	flag.StringVar(&debugMode, "debug", "", "Debug mode: 'all' (raw stream) or 'gps' (telemetry packets only)")
+	flag.Parse()
+
 	// run backend tasks
 	go serialReader()
 	go handleBroadcasts()
+	go csvLogger()
 
 	// Handle static files
 	fs := http.FileServer(http.Dir("./public"))
@@ -103,64 +111,111 @@ func handleBroadcasts() {
 	}
 }
 
+func csvLogger() {
+	var buffer []TelemetryData
+	ticker := time.NewTicker(5 * time.Second)
+	
+	logDir := "logs"
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		log.Printf("Failed to create logs directory: %v", err)
+	}
+	
+	filename := fmt.Sprintf("%s/ARES_FlightLog_%s.csv", logDir, time.Now().Format("2006-01-02_15-04-05"))
+	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("Failed to create CSV log: %v", err)
+		return
+	}
+	defer file.Close()
+
+	file.WriteString("Time,Latitude,Longitude,Altitude(ft),Velocity(ft/s),UpVel(ft/s),Satellites,Fix,RSSI,Battery(mV)\n")
+
+	for {
+		select {
+		case data := <-csvChan:
+			buffer = append(buffer, data)
+		case <-ticker.C:
+			if len(buffer) > 0 {
+				var sb strings.Builder
+				for _, d := range buffer {
+					sb.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+						d.Time, d.Lat, d.Lon, d.Alt, d.Vel, d.UpVel, d.Sats, d.Fix, d.RSSI, d.Volt))
+				}
+				file.WriteString(sb.String())
+				file.Sync()
+				log.Printf("Saved %d telemetry points to %s\n", len(buffer), filename)
+				buffer = buffer[:0]
+			}
+		}
+	}
+}
+
+var (
+	activePorts   = make(map[string]bool)
+	activePortsMu sync.Mutex
+)
+
 func serialReader() {
 	for {
 		ports, errList := serial.GetPortsList()
-		if errList != nil || len(ports) == 0 {
-			log.Println("No serial ports found, retrying in 5s...")
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		var activePort serial.Port
-		
-		for _, portName := range ports {
-			mode := &serial.Mode{BaudRate: 115200}
-			port, err := serial.Open(portName, mode)
-			if err != nil {
-				continue
-			}
-
-			port.SetReadTimeout(2 * time.Second)
-			scanner := bufio.NewScanner(port)
-			found := false
-
-			// test stream for valid packets
-			for i := 0; i < 5; i++ {
-				if scanner.Scan() {
-					if strings.HasPrefix(scanner.Text(), "@ ") {
-						found = true
-						break
+		if errList == nil && len(ports) > 0 {
+			activePortsMu.Lock()
+			for _, portName := range ports {
+				if !activePorts[portName] {
+					activePorts[portName] = true
+					if debugMode == "all" || debugMode == "gps" {
+						fmt.Printf("[DEBUG] Launching listener for %s...\n", portName)
 					}
+					go handlePort(portName)
 				}
 			}
+			activePortsMu.Unlock()
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
 
-			if found {
-				fmt.Printf("Connected to %s\n", portName)
-				activePort = port
-				break
-			} else {
-				port.Close()
+func handlePort(portName string) {
+	defer func() {
+		activePortsMu.Lock()
+		delete(activePorts, portName)
+		activePortsMu.Unlock()
+		if debugMode == "all" || debugMode == "gps" {
+			fmt.Printf("[DEBUG] Stopped listening to %s\n", portName)
+		}
+	}()
+
+	mode := &serial.Mode{BaudRate: 115200}
+	port, err := serial.Open(portName, mode)
+	if err != nil {
+		return
+	}
+	defer port.Close()
+
+	scanner := bufio.NewScanner(port)
+	firstPacket := true
+	for scanner.Scan() {
+		line := scanner.Text()
+		
+		isTelemetry := strings.HasPrefix(line, "@ ") || strings.HasPrefix(line, "@")
+		
+		if debugMode == "all" {
+			fmt.Printf("[LIVE-RAW %s] %s\n", portName, line)
+		} else if debugMode == "gps" && isTelemetry {
+			fmt.Printf("[LIVE-RAW %s] %s\n", portName, line)
+		}
+
+		if isTelemetry {
+			if firstPacket {
+				log.Printf("Connected to ARES Tracker on %s and receiving live telemetry!\n", portName)
+				firstPacket = false
 			}
+			parseLine(line)
 		}
+	}
 
-		if activePort == nil {
-			log.Println("No active telemetry stream found, retrying in 5s...")
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		// listen until device drops
-		scanner := bufio.NewScanner(activePort)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.HasPrefix(line, "@ ") {
-				parseLine(line)
-			}
-		}
-
-		log.Printf("Lost connection to ARES GPS, searching for new port...")
-		activePort.Close()
+	if !firstPacket {
+		log.Printf("Lost connection to ARES Tracker on %s\n", portName)
 	}
 }
 
@@ -204,6 +259,11 @@ func parseLine(line string) {
 		case broadcast <- currentData:
 		default:
 			// Channel full, skip to avoid blocking serial reader
+		}
+		
+		select {
+		case csvChan <- currentData:
+		default:
 		}
 	}
 }

@@ -12,6 +12,10 @@ main
 .DS_Store
 Thumbs.db
 
+# Flight Logs
+logs/
+*.csv
+
 # IDEs and Editors
 .vscode/
 .idea/

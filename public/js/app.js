@@ -18,26 +18,35 @@ function connect() {
     setTrackerDisconnected();
     setTimeout(connect, 5000);
   };
-  socket.onerror = (err) => console.error('WebSocket error:', err);
-  socket.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      if (data.lat || data.alt || data.rssi) setTrackerConnected();
+	socket.onerror = (err) => console.error('WebSocket error:', err);
+	socket.onmessage = (event) => {
+		try {
+			const data = JSON.parse(event.data);
+			if (data.lat || data.alt || data.rssi) setTrackerConnected();
 
-      if (data.rssi) {
-        const rssiVal = parseFloat(data.rssi);
-        let pct = 0;
-        if (rssiVal >= -50) pct = 100;
-        else if (rssiVal > -120) pct = Math.round(((rssiVal + 120) / 70) * 100);
-        data.rssi = pct.toString();
-      }
-      updateUI(data);
-      updateMapPosition(data);
-      updateCustomGraphs(data);
-    } catch (e) {
-      console.error('Error parsing telemetry:', e);
-    }
-  };
+			if (data.rssi) {
+				const rssiVal = parseFloat(data.rssi);
+				let pct = 0;
+				if (rssiVal >= -50) pct = 100;
+				else if (rssiVal > -120) pct = Math.round(((rssiVal + 120) / 70) * 100);
+				data.rssi = pct.toString();
+			}
+			updateUI(data);
+			updateMapPosition(data);
+			updateCustomGraphs(data);
+		} catch (e) {
+			console.error('Error parsing telemetry:', e);
+		}
+	};
+}
+
+window.altOffset = 0;
+window.lastRawAlt = 0;
+
+function tareAltitude() {
+	window.altOffset = window.lastRawAlt;
+	// Update UI immediately with 0
+	document.getElementById('alt').textContent = "0";
 }
 
 function setTrackerConnected() {
@@ -53,6 +62,16 @@ function updateUI(data) {
   const set = (id, v) => { document.getElementById(id).textContent = v || '--'; };
   ['lat', 'lon', 'alt', 'vel', 'upvel', 'fix', 'sats', 'volt', 'rssi'].forEach(k => {
     let val = data[k];
+
+    if (k === 'alt' && val) {
+      const rawAlt = parseFloat(val);
+      if (!isNaN(rawAlt)) {
+        window.lastRawAlt = rawAlt;
+        val = (rawAlt - window.altOffset).toString();
+        data.alt = val; // ensure graphs use the tared value
+      }
+    }
+
     if (val && (k === 'lat' || k === 'lon')) {
       const num = parseFloat(val);
       if (!isNaN(num)) val = parseFloat(num.toFixed(5)).toString(); // Max 5 decimal places, strips trailing zeros
@@ -105,7 +124,7 @@ function updateMapPosition(data) {
     map.setView([lat, lon], 16);
   } else {
     rocketMarker.setLatLng([lat, lon]);
-    if (!map.getBounds().contains([lat, lon])) map.panTo([lat, lon]);
+    if (!map.getBounds().contains([lat, lon])) map.panTo([lat, lon], { animate: false });
   }
 }
 

@@ -294,6 +294,16 @@ button:hover {
   background: rgba(232, 103, 90, 0.1);
 }
 
+#tareBtn {
+  color: var(--fire);
+  border-color: rgba(255, 106, 61, 0.3);
+}
+
+#tareBtn:hover {
+  border-color: var(--fire);
+  background: rgba(255, 106, 61, 0.1);
+}
+
 #customGraphs {
   flex: 1;
   min-height: 0;

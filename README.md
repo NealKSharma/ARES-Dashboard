@@ -34,6 +34,21 @@ Built with a Go backend that reads live telemetry data from a Featherweight GPS 
 
 4. Open your browser and navigate to `http://localhost:8080`.
 
+### Debug Modes
+If you are troubleshooting a hardware connection or want to view the raw data coming from the Featherweight tracker, you can launch the server with debug flags:
+
+- **Clean Telemetry Mode**
+  ```bash
+  go run main.go --debug=gps
+  ```
+  *Only prints valid, human-readable telemetry packets (filters out binary garbage).*
+
+- **Raw Stream Mode**
+  ```bash
+  go run main.go --debug=all
+  ```
+  *Prints absolutely every byte coming over the USB port.*
+
 ### Compiling for Production
 To create a standalone executable that you can easily double-click on launch day without needing to use the terminal:
 

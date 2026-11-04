@@ -592,7 +592,17 @@ button:hover {
 
 }
 
-@media (max-height: 850px) {
+@media (min-width: 1101px) and (max-height: 850px) {
   .table-row { padding: 8px 16px; }
   .app { grid-template-rows: 48px minmax(0, 1fr) 160px; }
+}
+
+@media (max-width: 600px) {
+  .topbar { grid-template-columns: 1fr; gap: 10px; padding: 12px; }
+  .mission-status { justify-content: space-between; }
+  .links { justify-self: start; flex-wrap: wrap; }
+  .rocket-list { flex-wrap: wrap; }
+  .rocket-list button { flex: 1 1 40%; }
+  .rocket-detail > div { padding: 12px; overflow-wrap: anywhere; }
+  .controls select { max-width: 100%; }
 }

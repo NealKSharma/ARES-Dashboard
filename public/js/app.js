@@ -33,9 +33,9 @@ function connect() {
 			try { updateUI(data); } catch(e) { console.error("UI error:", e); }
 			try { updateMapPosition(data); } catch(e) { console.error("Map error:", e); }
 			try { 
-				if (data.time !== window.lastGraphTime && !data.snapshot) {
+				if (!data.snapshot && (data.packet === 'RX_NOMTK' || data.time !== window.lastGraphTime)) {
 					updateCustomGraphs(data); 
-					window.lastGraphTime = data.time;
+					if (data.packet !== 'RX_NOMTK') window.lastGraphTime = data.time;
 				}
 			} catch(e) { console.error("Graph error:", e); }
 		} catch (e) {
@@ -60,7 +60,11 @@ function setTrackerConnected() {
   if (trackerTimeout) clearTimeout(trackerTimeout);
   trackerTimeout = setTimeout(setTrackerDisconnected, 3000);
 }
-function setTrackerDisconnected() { setLink('tracker-status', false, 'Tracker'); }
+function setTrackerDisconnected() {
+  setLink('tracker-status', false, 'Tracker');
+  currentG = null; lastUpVel = null; lastTrackerTime = null;
+  document.getElementById('gforce').textContent = '--';
+}
 
 let lastPacketTime = 0;
 let lastUpVel = null;
@@ -75,20 +79,18 @@ let flightPhase = "PAD";
 let ignitionTime = null;
 
 function parseTrackerTime(tStr) {
-  if (!tStr) return null;
-  const parts = tStr.split(':');
-  if (parts.length !== 3) return null;
-  const h = parseInt(parts[0], 10);
-  const m = parseInt(parts[1], 10);
-  const s = parseFloat(parts[2]);
-  return (h * 3600) + (m * 60) + s;
+  if (typeof tStr !== 'string' || !/^\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(tStr)) return null;
+  const [h, m, sec] = tStr.split(':').map(Number);
+  if (h >= 24 || m >= 60 || sec >= 60) return null;
+  return h * 3600 + m * 60 + sec;
 }
 
 function updateUI(data) {
+  const liveGPS = !data.snapshot && data.packet !== 'RX_NOMTK' && (data.fix == null || data.fix === '' || Number(data.fix) === 3);
   const set = (id, v) => { 
     const el = document.getElementById(id);
     if (el) {
-      if (!v) {
+      if (v === undefined || v === null || v === '') {
         el.textContent = '--';
       } else {
         el.textContent = v;
@@ -137,40 +139,37 @@ function updateUI(data) {
     set(k, val);
   });
   
-  if (data.upvel && data.time) {
-    const currentTrackerTime = parseTrackerTime(data.time);
-    const currentUpVel = parseFloat(data.upvel);
-    
-    if (lastUpVel !== null && lastTrackerTime !== null && currentTrackerTime !== null && !isNaN(currentUpVel)) {
-      let dt = currentTrackerTime - lastTrackerTime;
-      if (dt < 0 && dt > -86400) dt += 86400; // handle UTC midnight wrap
-      
-      if (dt > 0 && dt < 2.0) { // ignore gaps larger than 2 seconds
-        const accel = (currentUpVel - lastUpVel) / dt;
-        currentG = (accel / 32.174) + 1.0;
-        set('gforce', (currentG > 0 ? '+' : '') + currentG.toFixed(2));
-        
-        if (currentG > maxG) {
-          maxG = currentG;
-          set('max-g', (maxG > 0 ? '+' : '') + maxG.toFixed(2));
-        }
-      }
-    }
-    if (currentTrackerTime !== null && !isNaN(currentUpVel)) {
-      if (lastTrackerTime === null || currentTrackerTime > lastTrackerTime) {
-        lastUpVel = currentUpVel;
-        lastTrackerTime = currentTrackerTime;
+  let freshGPS = false;
+  if (liveGPS && data.upvel !== '' && data.upvel != null) {
+    const trackerTime = parseTrackerTime(data.time);
+    const up = Number(data.upvel);
+    if (trackerTime !== null && Number.isFinite(up)) {
+      let dt = lastTrackerTime === null ? null : trackerTime - lastTrackerTime;
+      if (dt !== null && dt < -43200) dt += 86400;
+      if (dt === null || dt > 0) {
+        freshGPS = true;
+        currentG = null;
+        if (dt !== null && dt < 2 && lastUpVel !== null) {
+          currentG = ((up - lastUpVel) / dt / 32.174) + 1;
+          set('gforce', (currentG > 0 ? '+' : '') + currentG.toFixed(2));
+          if (currentG > maxG) {
+            maxG = currentG;
+            set('max-g', (maxG > 0 ? '+' : '') + maxG.toFixed(2));
+          }
+        } else set('gforce', '--');
+        lastUpVel = up;
+        lastTrackerTime = trackerTime;
       }
     }
   }
-  
+
   if ((data.time || data.lat || data.rssi) && !data.snapshot) {
     lastPacketTime = performance.now();
   }
 
   const taredAlt = parseFloat(data.alt);
   const upvel = parseFloat(data.upvel);
-  if (!isNaN(taredAlt) && !isNaN(upvel) && currentG !== null) {
+  if (freshGPS && Number.isFinite(taredAlt) && Number.isFinite(upvel)) {
     checkFlightPhase(taredAlt, upvel, currentG);
   }
 }
@@ -200,7 +199,9 @@ let rocketMarker = null;
 function updateMapPosition(data) {
   const lat = parseFloat(data.lat);
   const lon = parseFloat(data.lon);
-  if (isNaN(lat) || isNaN(lon) || (lat === 0 && lon === 0)) return;
+  if (data.packet === 'RX_NOMTK') return;
+  if (data.fix != null && data.fix !== '' && Number(data.fix) < 2) return;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
 
   const last = rocketPath[rocketPath.length - 1];
   if (last && last[0] === lat && last[1] === lon) return;
@@ -278,6 +279,7 @@ function createGraph(key, label) {
   closeBtn.onclick = function() {
     const index = customGraphs.findIndex(g => g.yKey === yKey);
     if (index > -1) customGraphs.splice(index, 1);
+    chart.destroy();
     box.remove();
     updateGraphDropdown();
   };
@@ -309,6 +311,7 @@ function updateCustomGraphs(data) {
   timeIndex++;
   const label = data.time || timeIndex.toString();
   customGraphs.forEach(({ chart, yKey }) => {
+    if (data.packet === 'RX_NOMTK' && yKey !== 'rssi' && yKey !== 'volt') return;
     const y = parseFloat(data[yKey]);
     if (isNaN(y)) return;
     chart.data.labels.push(label);
@@ -340,6 +343,12 @@ function clearAllData(override = false) {
   document.getElementById('max-upvel').textContent = '--';
   document.getElementById('max-g').textContent = '--';
   
+  currentG = null;
+  lastUpVel = null;
+  lastTrackerTime = null;
+  window.lastGraphTime = undefined;
+  document.getElementById('gforce').textContent = '--';
+  if (rocketMarker) { rocketMarker.remove(); rocketMarker = null; }
   flightPhase = "PAD";
   ignitionTime = null;
   window.landedTime = null;
@@ -374,8 +383,19 @@ let padRawAlt = 0;
 
 function checkFlightPhase(taredAlt, upvel, g) {
   if (flightPhase === "PAD") {
-    if (g > 3.0 || upvel > 60) {
-      clearAllData(); 
+    if ((g !== null && g > 3.0) || upvel > 60) {
+      const baselineUp = lastUpVel, baselineTime = lastTrackerTime;
+      clearAllData();
+      lastUpVel = baselineUp; lastTrackerTime = baselineTime; currentG = g;
+      maxAlt = taredAlt; maxUpVel = upvel;
+      document.getElementById('max-alt').textContent = String(maxAlt);
+      document.getElementById('max-upvel').textContent = String(maxUpVel);
+      if (g !== null) {
+        maxG = g;
+        document.getElementById('gforce').textContent = g.toFixed(2);
+        document.getElementById('max-g').textContent = g.toFixed(2);
+      }
+
       padRawAlt = window.lastRawAlt;
       
       flightPhase = "BOOST";
@@ -386,7 +406,7 @@ function checkFlightPhase(taredAlt, upvel, g) {
       badge.classList.add('active-phase');
     }
   } else if (flightPhase === "BOOST") {
-    if (g < 1.0 && upvel > 50) flightPhase = "COAST";
+    if (g !== null && g < 1.0 && upvel > 50) flightPhase = "COAST";
   } else if (flightPhase === "COAST") {
     if (upvel < 0) flightPhase = "APOGEE";
   } else if (flightPhase === "APOGEE") {

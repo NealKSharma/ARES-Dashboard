@@ -2,17 +2,24 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"embed"
+	"encoding/csv"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"math"
 	"net/http"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
-	"path/filepath"
 
 	"github.com/gorilla/websocket"
 	"go.bug.st/serial"
@@ -32,6 +39,7 @@ type TelemetryData struct {
 	RSSI     string `json:"rssi"`
 	Volt     string `json:"volt"`
 	Time     string `json:"time"`
+	Packet   string `json:"packet,omitempty"`
 	Snapshot bool   `json:"snapshot,omitempty"`
 }
 
@@ -43,16 +51,17 @@ var broadcast = make(chan TelemetryData, 100)
 var csvChan = make(chan TelemetryData, 2000)
 var debugMode string
 var portFlag string
+var listenFlag string
+var stopping bool
+var csvDone = make(chan struct{})
+var broadcastDrops, csvDrops uint64
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
+var upgrader = websocket.Upgrader{} // Reject cross-origin browser connections by default.
 
 func main() {
 	flag.StringVar(&debugMode, "debug", "", "Debug mode: 'all' (raw stream) or 'gps' (telemetry packets only)")
-	flag.StringVar(&portFlag, "port", "", "Specific COM port to listen on (e.g., COM3). If empty, auto-scans all ports.")
+	flag.StringVar(&portFlag, "port", "", "Specific COM port to listen on (e.g., COM3). If empty, requires exactly one available port.")
+	flag.StringVar(&listenFlag, "listen", "127.0.0.1:8080", "HTTP listen address; use an explicit trusted LAN address only when sharing is intended")
 	flag.Parse()
 
 	go serialReader()
@@ -64,11 +73,30 @@ func main() {
 
 	http.HandleFunc("/ws", handleWebSocket)
 
-	port := ":8080"
-	fmt.Printf("Server starting on http://localhost%s\n", port)
-	if err := http.ListenAndServe(port, nil); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	port := listenFlag
+	fmt.Printf("Server starting on http://%s\n", port)
+	server := &http.Server{Addr: port, Handler: nil, ReadHeaderTimeout: 5 * time.Second}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	serverErrors := make(chan error, 1)
+	go func() { serverErrors <- server.ListenAndServe() }()
+	select {
+	case <-ctx.Done():
+	case err := <-serverErrors:
+		log.Printf("Server stopped: %v", err)
 	}
+	// Stop producers before closing the queue, then drain and sync the log.
+	dataMutex.Lock()
+	stopping = true
+	close(csvChan)
+	dataMutex.Unlock()
+	<-csvDone
+	shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdown); err != nil {
+		log.Printf("HTTP shutdown: %v", err)
+	}
+
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -81,15 +109,20 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	dataMutex.RLock()
 	data := currentData
 	dataMutex.RUnlock()
-	
+
 	data.Snapshot = true
 	// Write the snapshot FIRST before registering to the broadcaster to prevent concurrent writes
-	conn.WriteJSON(data)
+	conn.SetWriteDeadline(time.Now().Add(time.Second))
+	if err := conn.WriteJSON(data); err != nil {
+		conn.Close()
+		return
+	}
 
 	clientsMu.Lock()
 	clients[conn] = true
 	clientsMu.Unlock()
 
+	conn.SetReadLimit(1024)
 	for {
 		_, _, err := conn.ReadMessage()
 		if err != nil {
@@ -127,21 +160,26 @@ func handleBroadcasts() {
 }
 
 func csvLogger() {
-	var buffer []TelemetryData
-	ticker := time.NewTicker(5 * time.Second)
-
+	defer close(csvDone)
 	exePath, err := os.Executable()
 	if err != nil {
 		log.Printf("Failed to get executable path: %v", err)
 		return
 	}
-	logDir := filepath.Join(filepath.Dir(exePath), "logs")
-	
+	logTelemetry(filepath.Join(filepath.Dir(exePath), "logs"))
+}
+
+func logTelemetry(logDir string) {
+	var buffer []TelemetryData
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		log.Printf("Failed to create logs directory: %v", err)
+		return
 	}
 
-	filename := filepath.Join(logDir, fmt.Sprintf("ARES_FlightLog_%s.csv", time.Now().Format("2006-01-02_15-04-05")))
+	filename := filepath.Join(logDir, fmt.Sprintf("ARES_FlightLog_%s.csv", time.Now().Format("2006-01-02_15-04-05.000000000")))
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("Failed to create CSV log: %v", err)
@@ -149,24 +187,49 @@ func csvLogger() {
 	}
 	defer file.Close()
 
-	file.WriteString("Time,Latitude,Longitude,Altitude(ft),Velocity(ft/s),UpVel(ft/s),Satellites,Fix,RSSI,Battery(mV)\n")
-	file.Sync()
+	if _, err := file.WriteString("Time,Latitude,Longitude,Altitude(ft),Velocity(ft/s),UpVel(ft/s),Satellites,Fix,RSSI,Battery(mV)\n"); err != nil {
+		log.Printf("CSV header failed: %v", err)
+		return
+	}
+	if err := file.Sync(); err != nil {
+		log.Printf("CSV sync failed: %v", err)
+		return
+	}
 
+	flush := func() error {
+		if len(buffer) == 0 {
+			return nil
+		}
+		if err := writeCSVRows(file, buffer); err != nil {
+			return err
+		}
+		if err := file.Sync(); err != nil {
+			return err
+		}
+		log.Printf("Saved %d telemetry points to %s", len(buffer), filename)
+		buffer = buffer[:0]
+		return nil
+	}
 	for {
 		select {
-		case data := <-csvChan:
-			buffer = append(buffer, data)
-		case <-ticker.C:
-			if len(buffer) > 0 {
-				var sb strings.Builder
-				for _, d := range buffer {
-					sb.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
-						d.Time, d.Lat, d.Lon, d.Alt, d.Vel, d.UpVel, d.Sats, d.Fix, d.RSSI, d.Volt))
+		case data, ok := <-csvChan:
+			if !ok {
+				if err := flush(); err != nil {
+					log.Printf("CSV shutdown flush failed: %v", err)
 				}
-				file.WriteString(sb.String())
-				file.Sync()
-				log.Printf("Saved %d telemetry points to %s\n", len(buffer), filename)
-				buffer = buffer[:0]
+				return
+			}
+			buffer = append(buffer, data)
+			if len(buffer) >= 2000 {
+				if err := flush(); err != nil {
+					log.Printf("CSV write failed: %v", err)
+					return
+				}
+			}
+		case <-ticker.C:
+			if err := flush(); err != nil {
+				log.Printf("CSV write failed: %v", err)
+				return
 			}
 		}
 	}
@@ -178,6 +241,7 @@ var (
 )
 
 func serialReader() {
+	lastAmbiguous := ""
 	for {
 		var ports []string
 		if portFlag != "" {
@@ -190,6 +254,17 @@ func serialReader() {
 				continue
 			}
 		}
+
+		if portFlag == "" && len(ports) > 1 {
+			summary := strings.Join(ports, ", ")
+			if summary != lastAmbiguous {
+				log.Printf("Multiple serial ports (%s); select the tracker with --port to avoid mixing telemetry", summary)
+				lastAmbiguous = summary
+			}
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		lastAmbiguous = ""
 
 		if len(ports) > 0 {
 			activePortsMu.Lock()
@@ -249,7 +324,7 @@ func handlePort(portName string) {
 			parseLine(line)
 		}
 	}
-	
+
 	if err := scanner.Err(); err != nil {
 		log.Printf("Scanner error on %s: %v", portName, err)
 	}
@@ -261,7 +336,7 @@ func handlePort(portName string) {
 
 func parseLine(line string) {
 	parts := strings.Fields(line)
-	if len(parts) < 3 {
+	if len(parts) < 3 || parts[0] != "@" {
 		return
 	}
 
@@ -269,42 +344,76 @@ func parseLine(line string) {
 
 	dataMutex.Lock()
 	defer dataMutex.Unlock()
+	if stopping {
+		return
+	}
 	updated := false
 
+	next := currentData
 	if packetType == "GPS_STAT" {
-		currentData.Time = extractVal(parts, indexOf(parts, "Time")+1)
-		if currentData.Time == "" { // fallback if "Time" key isn't explicitly printed
-			currentData.Time = extractVal(parts, 6)
+		// GS and FND are not the selected rocket's live tracker GPS.
+		if indexOf(parts, "GS") >= 0 || indexOf(parts, "FND") >= 0 || indexOf(parts, "CRC_ERR") >= 0 {
+			return
 		}
-		currentData.Alt = extractAfter(parts, "Alt")
-		currentData.Lat = extractAfter(parts, "lt")
-		currentData.Lon = extractAfter(parts, "ln")
-
-		velIndex := indexOf(parts, "Vel")
-		if velIndex != -1 && velIndex+3 < len(parts) {
-			currentData.Vel = parts[velIndex+1]
-			currentData.UpVel = parts[velIndex+3]
+		next.Time = extractAfter(parts, "Time")
+		if next.Time == "" {
+			next.Time = extractVal(parts, 6)
 		}
-
-		currentData.Fix = extractAfter(parts, "Fix")
-		currentData.Sats = extractAfter(parts, "#")
+		if _, err := time.Parse("15:04:05", next.Time); err != nil {
+			return
+		}
+		next.Alt = extractAfter(parts, "Alt")
+		next.Lat = extractAfter(parts, "lt")
+		next.Lon = extractAfter(parts, "ln")
+		velocity := indexOf(parts, "Vel")
+		if velocity < 0 || velocity+3 >= len(parts) {
+			return
+		}
+		next.Vel, next.UpVel = parts[velocity+1], parts[velocity+3]
+		next.Fix, next.Sats = extractAfter(parts, "Fix"), extractAfter(parts, "#")
+		for _, value := range []string{next.Alt, next.Lat, next.Lon, next.Vel, next.UpVel, next.Fix, next.Sats} {
+			if !finiteNumber(value) {
+				return
+			}
+		}
+		lat, _ := strconv.ParseFloat(next.Lat, 64)
+		lon, _ := strconv.ParseFloat(next.Lon, 64)
+		if math.Abs(lat) > 90 || math.Abs(lon) > 180 {
+			return
+		}
+		if next.Fix != "0" && next.Fix != "2" && next.Fix != "3" {
+			return
+		}
 		updated = true
-
 	} else if packetType == "RX_NOMTK" {
-		currentData.RSSI = extractAfter(parts, "RSSI")
-		currentData.Volt = extractAfter(parts, "trk_B_V")
+		next.RSSI, next.Volt = extractAfter(parts, "RSSI"), extractAfter(parts, "trk_B_V")
+		if !finiteNumber(next.RSSI) || !finiteNumber(next.Volt) {
+			return
+		}
 		updated = true
+	}
+	if updated {
+		currentData = next
 	}
 
 	if updated {
+		currentData.Packet = packetType
 		select {
 		case broadcast <- currentData:
 		default:
+			broadcastDrops++
+			if broadcastDrops == 1 || broadcastDrops%100 == 0 {
+				log.Printf("Broadcast queue dropped %d samples", broadcastDrops)
+			}
 		}
 
 		select {
 		case csvChan <- currentData:
 		default:
+			csvDrops++
+			if csvDrops == 1 || csvDrops%100 == 0 {
+				log.Printf("CSV queue dropped %d samples", csvDrops)
+			}
 		}
 	}
 }
@@ -331,4 +440,21 @@ func indexOf(parts []string, key string) int {
 		}
 	}
 	return -1
+}
+
+// writeCSVRows escapes fields and surfaces buffered write errors.
+func writeCSVRows(dst io.Writer, rows []TelemetryData) error {
+	writer := csv.NewWriter(dst)
+	for _, d := range rows {
+		if err := writer.Write([]string{d.Time, d.Lat, d.Lon, d.Alt, d.Vel, d.UpVel, d.Sats, d.Fix, d.RSSI, d.Volt}); err != nil {
+			return err
+		}
+	}
+	writer.Flush()
+	return writer.Error()
+}
+
+func finiteNumber(s string) bool {
+	value, err := strconv.ParseFloat(s, 64)
+	return err == nil && !math.IsNaN(value) && !math.IsInf(value, 0)
 }

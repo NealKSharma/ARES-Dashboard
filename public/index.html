@@ -55,7 +55,7 @@
       </div>
 
       <div class="table-row">
-        <span class="t-label">Net Accel</span>
+        <span class="t-label" title="Estimated from GPS vertical velocity; not an accelerometer measurement">Est. vertical G</span>
         <span class="t-live"><span id="gforce">--</span><small>G</small></span>
         <span class="t-peak"><span id="max-g">--</span><small>G</small></span>
       </div>
@@ -82,7 +82,7 @@
     <div class="graphs-head">
       <span class="panel-title">Graphs</span>
       <div class="controls">
-        <select id="ySelect" onchange="updateGraphDropdown()">
+        <select aria-label="Telemetry graph" id="ySelect" onchange="updateGraphDropdown()">
           <option value="alt">Altitude (ft)</option>
           <option value="vel">Horizontal velocity (ft/s)</option>
           <option value="upvel">Vertical velocity (ft/s)</option>

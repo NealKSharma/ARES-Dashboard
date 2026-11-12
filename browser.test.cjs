@@ -70,3 +70,51 @@ test('disconnect clears acceleration and next valid sample can reacquire',()=>{
 test('2-D GPS fix does not drive altitude flight state',()=>{
  const d=dashboard();d.run(`updateUI({time:'12:00:00',alt:'1000',upvel:'200',fix:'2'});`);assert.equal(d.run('flightPhase'),'PAD');
 });
+
+test('invalid and 2-D fixes cannot contaminate flight readings, peaks, graphs or tare',()=>{
+ for(const fix of ['0','2']) {
+  const d=dashboard();
+  d.run(`updateUI({packet:'GPS_STAT',time:'12:00:00',alt:'1000',vel:'10',upvel:'0',fix:'3'});`);
+  d.run(`const bad={packet:'GPS_STAT',time:'12:00:01',alt:'90000',vel:'999',upvel:'999',fix:'${fix}'};updateUI(bad);updateCustomGraphs(bad);tareAltitude();`);
+  assert.equal(d.run('maxAlt'),1000);assert.equal(d.run('maxVel'),10);
+  assert.equal(d.document.getElementById('alt').textContent,'--');
+  assert.equal(d.run('customGraphs[0].chart.data.labels.length'),0);
+  assert.equal(d.run('window.altOffset'),0);
+ }
+});
+test('launch preserves the current horizontal-speed peak',()=>{
+ const d=dashboard();d.run(`updateUI({packet:'GPS_STAT',time:'12:00:00',alt:'1100',vel:'300',upvel:'100',fix:'3'});`);
+ assert.equal(d.run('flightPhase'),'BOOST');assert.equal(d.run('maxVel'),300);
+ assert.equal(d.document.getElementById('max-vel').textContent,'300');
+});
+test('sparse flight can skip unobserved coast and recover through descent to landing',()=>{
+ const d=dashboard();const phases=[];
+ for(const [time,alt,upvel] of [['00','1000','100'],['03','1500','-10'],['06','1000','0']]){
+  d.run(`updateUI({packet:'GPS_STAT',time:'12:00:${time}',alt:'${alt}',upvel:'${upvel}',fix:'3'});`);
+  phases.push(d.run('flightPhase'));
+ }
+ assert.deepEqual(phases,['BOOST','APOGEE','LANDED']);
+});
+test('radio-tagged reconnect snapshot restores marker without live radio path points',()=>{
+ const d=dashboard();d.run(`updateMapPosition({snapshot:true,packet:'RX_NOMTK',lat:'42',lon:'-93',fix:'3'});`);
+ assert.equal(d.run('rocketPath.length'),1);assert.notEqual(d.run('rocketMarker'),null);
+ d.run(`updateMapPosition({packet:'RX_NOMTK',lat:'43',lon:'-93',fix:'3'});`);
+ assert.equal(d.run('rocketPath.length'),1);
+});
+test('snapshots and radio updates do not recreate cleared peaks',()=>{
+ const d=dashboard();
+ d.run(`updateUI({snapshot:true,packet:'GPS_STAT',alt:'1000',vel:'300',upvel:'100',fix:'3'});updateUI({packet:'RX_NOMTK',alt:'1000',vel:'300',upvel:'100',fix:'3'});`);
+ assert.equal(d.run('maxAlt'),-Infinity);assert.equal(d.run('maxVel'),0);
+});
+test('no-fix recovery restarts acceleration baseline',()=>{
+ const d=dashboard();d.run(`updateUI({time:'12:00:00',upvel:'0',fix:'3'});updateUI({time:'12:00:01',upvel:'999',fix:'0'});updateUI({time:'12:00:02',upvel:'20',fix:'3'});`);
+ assert.equal(d.run('currentG'),null);
+});
+test('platform cards use corrected specifications and do not render NaN',()=>{
+ const d=dashboard();assert.equal(d.run('rockets.harmonia.height'),'~15');assert.equal(d.run('rockets.scylla.height'),'~5');
+ for(const id of ['harmonia','shelly','scylla','phobos']) {
+  d.run(`selectPlatform('${id}')`);
+  assert.ok(!d.document.getElementById('platform-content').innerHTML.includes('NaN'));
+ }
+ assert.match(d.run('rockets.shelly.structure'),/fiberglass/);
+});

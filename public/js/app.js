@@ -45,10 +45,11 @@ function connect() {
 }
 
 window.altOffset = 0;
-window.lastRawAlt = 0;
+window.lastRawAlt = null;
 
 function tareAltitude() {
 	if (flightPhase !== "PAD" && flightPhase !== "LANDED") return;
+	if (!Number.isFinite(window.lastRawAlt)) return;
 	window.altOffset = window.lastRawAlt;
 	document.getElementById('alt').textContent = "0";
 	maxAlt = 0;
@@ -85,8 +86,13 @@ function parseTrackerTime(tStr) {
   return h * 3600 + m * 60 + sec;
 }
 
+function hasFlightFix(data) {
+  // Legacy simulator samples omit fix; actual tracker packets must have a 3-D fix.
+  return Number(data.fix) === 3 || (!data.packet && (data.fix == null || data.fix === ''));
+}
+
 function updateUI(data) {
-  const liveGPS = !data.snapshot && data.packet !== 'RX_NOMTK' && (data.fix == null || data.fix === '' || Number(data.fix) === 3);
+  const liveGPS = !data.snapshot && data.packet !== 'RX_NOMTK' && hasFlightFix(data);
   const set = (id, v) => { 
     const el = document.getElementById(id);
     if (el) {
@@ -100,6 +106,11 @@ function updateUI(data) {
   
   ['lat', 'lon', 'alt', 'vel', 'upvel', 'fix', 'sats', 'volt', 'rssi'].forEach(k => {
     let val = data[k];
+    if (['alt', 'vel', 'upvel'].includes(k) && !hasFlightFix(data)) {
+      set(k, null);
+      if (k === 'alt') window.lastRawAlt = null;
+      return;
+    }
 
     if (k === 'alt' && val) {
       const rawAlt = parseFloat(val);
@@ -109,7 +120,7 @@ function updateUI(data) {
         data.alt = val;
         
         const taredAlt = parseFloat(val);
-        if (taredAlt > maxAlt) {
+        if (liveGPS && taredAlt > maxAlt) {
           maxAlt = taredAlt;
           set('max-alt', maxAlt.toString());
         }
@@ -118,7 +129,7 @@ function updateUI(data) {
 
     if (k === 'vel' && val) {
       const v = parseFloat(val);
-      if (!isNaN(v) && v > maxVel) {
+      if (liveGPS && Number.isFinite(v) && v > maxVel) {
         maxVel = v;
         set('max-vel', maxVel.toString());
       }
@@ -126,7 +137,7 @@ function updateUI(data) {
     
     if (k === 'upvel' && val) {
       const uv = parseFloat(val);
-      if (!isNaN(uv) && uv > maxUpVel) {
+      if (liveGPS && Number.isFinite(uv) && uv > maxUpVel) {
         maxUpVel = uv;
         set('max-upvel', maxUpVel.toString());
       }
@@ -139,6 +150,10 @@ function updateUI(data) {
     set(k, val);
   });
   
+  if (!hasFlightFix(data)) {
+    currentG = null; lastUpVel = null; lastTrackerTime = null;
+    set('gforce', null);
+  }
   let freshGPS = false;
   if (liveGPS && data.upvel !== '' && data.upvel != null) {
     const trackerTime = parseTrackerTime(data.time);
@@ -170,7 +185,7 @@ function updateUI(data) {
   const taredAlt = parseFloat(data.alt);
   const upvel = parseFloat(data.upvel);
   if (freshGPS && Number.isFinite(taredAlt) && Number.isFinite(upvel)) {
-    checkFlightPhase(taredAlt, upvel, currentG);
+    checkFlightPhase(taredAlt, upvel, currentG, Number(data.vel));
   }
 }
 
@@ -199,7 +214,7 @@ let rocketMarker = null;
 function updateMapPosition(data) {
   const lat = parseFloat(data.lat);
   const lon = parseFloat(data.lon);
-  if (data.packet === 'RX_NOMTK') return;
+  if (data.packet === 'RX_NOMTK' && !data.snapshot) return;
   if (data.fix != null && data.fix !== '' && Number(data.fix) < 2) return;
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
 
@@ -308,12 +323,14 @@ function createGraph(key, label) {
 }
 
 function updateCustomGraphs(data) {
+  if (data.snapshot) return;
   timeIndex++;
   const label = data.time || timeIndex.toString();
   customGraphs.forEach(({ chart, yKey }) => {
     if (data.packet === 'RX_NOMTK' && yKey !== 'rssi' && yKey !== 'volt') return;
+    if (['alt', 'vel', 'upvel'].includes(yKey) && !hasFlightFix(data)) return;
     const y = parseFloat(data[yKey]);
-    if (isNaN(y)) return;
+    if (!Number.isFinite(y)) return;
     chart.data.labels.push(label);
     chart.data.datasets[0].data.push(y);
     if (chart.data.labels.length > 10000) {
@@ -381,13 +398,17 @@ updateClock();
 
 let padRawAlt = 0;
 
-function checkFlightPhase(taredAlt, upvel, g) {
+function checkFlightPhase(taredAlt, upvel, g, horizontalVelocity) {
   if (flightPhase === "PAD") {
     if ((g !== null && g > 3.0) || upvel > 60) {
       const baselineUp = lastUpVel, baselineTime = lastTrackerTime;
       clearAllData();
       lastUpVel = baselineUp; lastTrackerTime = baselineTime; currentG = g;
       maxAlt = taredAlt; maxUpVel = upvel;
+      if (Number.isFinite(horizontalVelocity)) {
+        maxVel = horizontalVelocity;
+        document.getElementById('max-vel').textContent = String(maxVel);
+      }
       document.getElementById('max-alt').textContent = String(maxAlt);
       document.getElementById('max-upvel').textContent = String(maxUpVel);
       if (g !== null) {
@@ -406,21 +427,27 @@ function checkFlightPhase(taredAlt, upvel, g) {
       badge.classList.add('active-phase');
     }
   } else if (flightPhase === "BOOST") {
-    if (g !== null && g < 1.0 && upvel > 50) flightPhase = "COAST";
+    // Descent remains observable even when sparse samples cannot estimate G.
+    if (upvel < 0) flightPhase = "APOGEE";
+    else if (g !== null && g < 1.0 && upvel > 0) flightPhase = "COAST";
   } else if (flightPhase === "COAST") {
     if (upvel < 0) flightPhase = "APOGEE";
   } else if (flightPhase === "APOGEE") {
-    if (upvel < -40) flightPhase = "DROGUE";
+    if (Math.abs(upvel) < 5 && Math.abs(window.lastRawAlt - padRawAlt) < 500) {
+      flightPhase = "LANDED";
+      window.landedTime = performance.now();
+      document.getElementById('flight-phase').classList.remove('active-phase');
+    } else if (upvel < -40) flightPhase = "DROGUE";
     else if (upvel > -40 && upvel < -5 && (maxAlt - taredAlt) > 300) flightPhase = "MAIN";
   } else if (flightPhase === "DROGUE") {
     if (upvel > -35 && upvel < -5) flightPhase = "MAIN";
-    else if (Math.abs(upvel) < 5 && (window.lastRawAlt - padRawAlt) < 500) {
+    else if (Math.abs(upvel) < 5 && Math.abs(window.lastRawAlt - padRawAlt) < 500) {
       flightPhase = "LANDED";
       window.landedTime = performance.now();
       document.getElementById('flight-phase').classList.remove('active-phase');
     }
   } else if (flightPhase === "MAIN") {
-    if (Math.abs(upvel) < 5 && (window.lastRawAlt - padRawAlt) < 500) {
+    if (Math.abs(upvel) < 5 && Math.abs(window.lastRawAlt - padRawAlt) < 500) {
       flightPhase = "LANDED";
       window.landedTime = performance.now();
       document.getElementById('flight-phase').classList.remove('active-phase');
@@ -432,32 +459,24 @@ function checkFlightPhase(taredAlt, upvel, g) {
 const MAX_ALT = 15000;
 const rockets = {
   harmonia: {
-    name: 'Harmonia', note: 'Fastest (~1.25 Mach)',
-    height: '12.5', structure: 'Carbon fiber',
-    alt: 15000, altText: '~15,000', altMetric: '~4.6 km',
-    flight: '427', apogee: '~38 s',
-    payload: '3U bay, max 15 lb (10×10×30 cm)'
+    name: 'Harmonia', note: 'Designed for supersonic flight',
+    height: '~15', structure: 'Carbon fiber',
+    payload: '3U payload bay'
   },
   shelly: {
-    name: 'Shelly', note: 'Versatile modular design',
-    height: '~4.95', structure: '3D print, laser cut, tube',
-    alt: 3520, altText: '~3,520', altMetric: '~1 km',
-    flight: '106', apogee: '~14.2 s',
-    payload: 'Modular (35cm L × 6.48cm D)'
+    name: 'Shelly', note: 'In development · PDR complete',
+    structure: '3D printed and fiberglass',
+    payload: 'Planned replacement for Scylla'
   },
   scylla: {
-    name: 'Scylla', note: '142.77 m/s',
-    height: '~4.1', structure: '3D printed',
-    alt: 4200, altText: '~4,200', altMetric: '~1.28 km',
-    flight: '110', apogee: '~16 s',
-    payload: 'Modular (18cm L × 7cm D)'
+    name: 'Scylla', note: '2.5 in diameter',
+    height: '~5', structure: 'Fully 3D printed',
+    payload: 'Small payloads, including CLUE boards and micro:bits'
   },
   phobos: {
-    name: 'Phobos', note: 'Our First Rocket',
-    height: '10+', structure: 'Fiber glass',
-    alt: 7400, altText: '~7,400', altMetric: '~2.26 km',
-    flight: '248', apogee: '~21 s',
-    payload: 'EM pass-through (~55cm L × 15cm D)'
+    name: 'Phobos', note: 'Our first rocket',
+    height: '~10', structure: 'Fiberglass',
+    payload: 'Larger payloads'
   }
 };
 
@@ -482,7 +501,7 @@ function selectPlatform(id) {
       <span class="r-key">Max altitude</span>
       <span class="r-val">${v(r.altText)} <small>${r.altText ? 'ft' : ''}</small></span>
       <span class="r-sub">${r.altMetric || "&nbsp;"}</span>
-      <div class="scale"><b style="width:${(r.alt / MAX_ALT * 100).toFixed(0)}%"></b></div>
+      <div class="scale"><b style="width:${Number.isFinite(r.alt) ? (r.alt / MAX_ALT * 100).toFixed(0) : 0}%"></b></div>
     </div>
     <div><span class="r-key">Flight time</span><span class="r-val">${v(r.flight)} <small>${r.flight ? 's' : ''}</small></span><span class="r-sub">${r.apogee ? 'Apogee at ' + r.apogee : '&nbsp;'}</span></div>
     <div><span class="r-key">Payload</span><span class="r-text">${v(r.payload)}</span></div>`;

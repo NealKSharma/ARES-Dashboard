@@ -23,6 +23,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"go.bug.st/serial"
+	"go.bug.st/serial/enumerator"
 )
 
 //go:embed public
@@ -159,14 +160,25 @@ func handleBroadcasts() {
 	}
 }
 
+func getLogDir() string {
+	// If running as a standalone binary outside temp, use its directory.
+	// When running via 'go run', exePath is in a temporary build directory (e.g. go-build),
+	// so fall back to the working directory's "logs" folder.
+	exePath, err := os.Executable()
+	if err == nil {
+		dir := filepath.Dir(exePath)
+		cleanDir := strings.ToLower(filepath.Clean(dir))
+		tempDir := strings.ToLower(filepath.Clean(os.TempDir()))
+		if !strings.Contains(cleanDir, "go-build") && !strings.HasPrefix(cleanDir, tempDir) {
+			return filepath.Join(dir, "logs")
+		}
+	}
+	return "logs"
+}
+
 func csvLogger() {
 	defer close(csvDone)
-	exePath, err := os.Executable()
-	if err != nil {
-		log.Printf("Failed to get executable path: %v", err)
-		return
-	}
-	logTelemetry(filepath.Join(filepath.Dir(exePath), "logs"))
+	logTelemetry(getLogDir())
 }
 
 func logTelemetry(logDir string) {
@@ -180,6 +192,9 @@ func logTelemetry(logDir string) {
 	}
 
 	filename := filepath.Join(logDir, fmt.Sprintf("ARES_FlightLog_%s.csv", time.Now().Format("2006-01-02_15-04-05.000000000")))
+	if abs, err := filepath.Abs(filename); err == nil {
+		filename = abs
+	}
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("Failed to create CSV log: %v", err)
@@ -206,7 +221,9 @@ func logTelemetry(logDir string) {
 		if err := file.Sync(); err != nil {
 			return err
 		}
-		log.Printf("Saved %d telemetry points to %s", len(buffer), filename)
+		if debugMode == "all" || debugMode == "gps" {
+			log.Printf("Saved %d telemetry points to %s", len(buffer), filename)
+		}
 		buffer = buffer[:0]
 		return nil
 	}
@@ -238,56 +255,97 @@ func logTelemetry(logDir string) {
 var (
 	activePorts   = make(map[string]bool)
 	activePortsMu sync.Mutex
+	activeTracker string
+	trackerMu     sync.Mutex
 )
 
+func discoverPorts() ([]string, error) {
+	detailed, err := enumerator.GetDetailedPortsList()
+	if err == nil && len(detailed) > 0 {
+		var usbPorts []string
+		var otherPorts []string
+		for _, p := range detailed {
+			prod := strings.ToLower(p.Product)
+			name := strings.ToLower(p.Name)
+			// Ignore virtual Bluetooth serial links that cause OS connection delays
+			if strings.Contains(prod, "bluetooth") || strings.Contains(name, "bluetooth") {
+				continue
+			}
+			if p.IsUSB || p.VID != "" {
+				usbPorts = append(usbPorts, p.Name)
+			} else {
+				otherPorts = append(otherPorts, p.Name)
+			}
+		}
+		// Prioritize USB serial ports first, then any other physical serial ports
+		all := append(usbPorts, otherPorts...)
+		if len(all) > 0 {
+			return all, nil
+		}
+	}
+
+	return serial.GetPortsList()
+}
+
 func serialReader() {
-	lastAmbiguous := ""
+	lastLogged := ""
 	for {
+		trackerMu.Lock()
+		hasTracker := (activeTracker != "")
+		trackerMu.Unlock()
+
+		if hasTracker {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
 		var ports []string
 		if portFlag != "" {
 			ports = []string{portFlag}
 		} else {
 			var errList error
-			ports, errList = serial.GetPortsList()
+			ports, errList = discoverPorts()
 			if errList != nil {
-				time.Sleep(3 * time.Second)
+				time.Sleep(2 * time.Second)
 				continue
 			}
 		}
 
-		if portFlag == "" && len(ports) > 1 {
-			summary := strings.Join(ports, ", ")
-			if summary != lastAmbiguous {
-				log.Printf("Multiple serial ports (%s); select the tracker with --port to avoid mixing telemetry", summary)
-				lastAmbiguous = summary
-			}
-			time.Sleep(3 * time.Second)
-			continue
-		}
-		lastAmbiguous = ""
-
 		if len(ports) > 0 {
+			summary := strings.Join(ports, ", ")
+			if (debugMode == "all" || debugMode == "gps") && summary != lastLogged && portFlag == "" {
+				log.Printf("Scanning serial ports for telemetry: %s", summary)
+				lastLogged = summary
+			}
+
 			activePortsMu.Lock()
 			for _, portName := range ports {
 				if !activePorts[portName] {
 					activePorts[portName] = true
-					if debugMode == "all" || debugMode == "gps" {
-						fmt.Printf("[DEBUG] Launching listener for %s...\n", portName)
-					}
-					go handlePort(portName)
+					go handlePort(portName, portFlag != "")
 				}
 			}
 			activePortsMu.Unlock()
 		}
-		time.Sleep(3 * time.Second)
+
+		time.Sleep(2 * time.Second)
 	}
 }
 
-func handlePort(portName string) {
+func handlePort(portName string, isExplicit bool) {
 	defer func() {
 		activePortsMu.Lock()
 		delete(activePorts, portName)
 		activePortsMu.Unlock()
+
+		trackerMu.Lock()
+		wasActive := (activeTracker == portName)
+		if wasActive {
+			activeTracker = ""
+			log.Printf("Lost connection to ARES Tracker on %s\n", portName)
+		}
+		trackerMu.Unlock()
+
 		if debugMode == "all" || debugMode == "gps" {
 			fmt.Printf("[DEBUG] Stopped listening to %s\n", portName)
 		}
@@ -300,6 +358,25 @@ func handlePort(portName string) {
 	}
 	defer port.Close()
 
+	if isExplicit {
+		trackerMu.Lock()
+		activeTracker = portName
+		trackerMu.Unlock()
+		log.Printf("Listening for ARES Tracker on %s...\n", portName)
+	} else {
+		// Auto-searching: probe for valid telemetry with a 5-second window.
+		// If no telemetry packet arrives or another port claims the tracker, close this port.
+		probeTimer := time.AfterFunc(5*time.Second, func() {
+			trackerMu.Lock()
+			isTracker := (activeTracker == portName)
+			trackerMu.Unlock()
+			if !isTracker {
+				port.Close()
+			}
+		})
+		defer probeTimer.Stop()
+	}
+
 	scanner := bufio.NewScanner(port)
 	buf := make([]byte, 1024*1024) // 1MB buffer
 	scanner.Buffer(buf, 1024*1024)
@@ -310,27 +387,35 @@ func handlePort(portName string) {
 
 		isTelemetry := strings.HasPrefix(line, "@ ") || strings.HasPrefix(line, "@")
 
-		if debugMode == "all" {
-			fmt.Printf("[LIVE-RAW %s] %s\n", portName, line)
-		} else if debugMode == "gps" && isTelemetry {
-			fmt.Printf("[LIVE-RAW %s] %s\n", portName, line)
-		}
-
 		if isTelemetry {
+			trackerMu.Lock()
+			if activeTracker == "" {
+				activeTracker = portName
+				log.Printf("Found ARES Tracker on %s (live telemetry detected)!\n", portName)
+			}
+			isCurrentTracker := (activeTracker == portName)
+			trackerMu.Unlock()
+
+			if !isCurrentTracker {
+				// Another port was already selected as the active tracker; stop this one.
+				return
+			}
+
 			if firstPacket {
-				log.Printf("Connected to ARES Tracker on %s and receiving live telemetry!\n", portName)
 				firstPacket = false
 			}
+
+			if debugMode == "all" || debugMode == "gps" {
+				fmt.Printf("[LIVE-RAW %s] %s\n", portName, line)
+			}
 			parseLine(line)
+		} else if debugMode == "all" {
+			fmt.Printf("[LIVE-RAW %s] %s\n", portName, line)
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
+	if err := scanner.Err(); err != nil && debugMode == "all" {
 		log.Printf("Scanner error on %s: %v", portName, err)
-	}
-
-	if !firstPacket {
-		log.Printf("Lost connection to ARES Tracker on %s\n", portName)
 	}
 }
 

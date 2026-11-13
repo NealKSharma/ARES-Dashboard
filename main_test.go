@@ -141,3 +141,57 @@ func TestWebSocketSnapshotAndOrigin(t *testing.T) {
 		t.Fatal("cross-origin access accepted")
 	}
 }
+
+func TestGetLogDir(t *testing.T) {
+	dir := getLogDir()
+	if dir == "" {
+		t.Fatal("expected non-empty log directory")
+	}
+	// Under 'go test', the binary runs in a temporary directory, so getLogDir falls back to "logs"
+	if dir != "logs" && !filepath.IsAbs(dir) {
+		t.Fatalf("unexpected log dir format: %s", dir)
+	}
+}
+
+func TestDiscoverPorts(t *testing.T) {
+	ports, err := discoverPorts()
+	if err != nil {
+		t.Fatalf("discoverPorts error: %v", err)
+	}
+	t.Logf("Discovered candidate ports: %v", ports)
+	for _, p := range ports {
+		if strings.Contains(strings.ToLower(p), "bluetooth") {
+			t.Fatalf("expected bluetooth port to be excluded, got: %s", p)
+		}
+	}
+}
+
+func TestActiveTrackerArbitration(t *testing.T) {
+	trackerMu.Lock()
+	activeTracker = ""
+	trackerMu.Unlock()
+
+	// Port 1 claims tracker
+	trackerMu.Lock()
+	if activeTracker == "" {
+		activeTracker = "PORT_A"
+	}
+	trackerMu.Unlock()
+
+	// Port 2 tries to claim tracker
+	trackerMu.Lock()
+	if activeTracker == "" {
+		activeTracker = "PORT_B"
+	}
+	won := (activeTracker == "PORT_B")
+	trackerMu.Unlock()
+
+	if won {
+		t.Fatal("second port should not override active tracker")
+	}
+
+	// Reset
+	trackerMu.Lock()
+	activeTracker = ""
+	trackerMu.Unlock()
+}

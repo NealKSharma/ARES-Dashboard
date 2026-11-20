@@ -1,131 +1,70 @@
 # ARES Dashboard Setup Guide
 
-This guide takes you from an empty Windows laptop to a dashboard that is armed and ready on the pad. Follow it in order the first time. On launch day you only need [Part 6](#part-6-launch-day-checklist).
+## Quick setup (Windows)
 
-- Repository: https://github.com/NealKSharma/ARES-Dashboard
-- Every command in this guide is also in [COMMANDS.md](COMMANDS.md).
+1. Create a folder named `ARES` in File Explorer.
+2. Open that folder, type `cmd` in the File Explorer address bar and press **Enter**.
+3. Install Git and Go in Command Prompt.
 
----
-
-## Part 1: Install the tools
-
-You need Git to download the code and Go to build it. Node.js and Arduino IDE are optional: Node.js runs the browser tests and Arduino IDE flashes the bench simulator board.
-
-Open **PowerShell** (Start menu, type `PowerShell`) and run:
-
-```powershell
-winget install --id Git.Git -e
-winget install --id GoLang.Go -e
-```
-
-Optional:
-
-```powershell
-winget install --id OpenJS.NodeJS.LTS -e
-winget install --id ArduinoSA.IDE.stable -e
-```
-
-If `winget` is not available, download the installers instead:
-
-- Git: https://git-scm.com/downloads
-- Go (1.21 or newer): https://go.dev/dl/
-- Node.js LTS: https://nodejs.org/
-- Arduino IDE: https://www.arduino.cc/en/software
-
-**Close PowerShell and open a new window** so it picks up the new tools, then check them:
-
-```powershell
-git --version
-go version
-node --version
-```
-
-Each should print a version number. If one says "not recognized", reopen PowerShell or reinstall that tool.
-
----
-
-## Part 2: Create a folder and download the code
-
-Pick a home for your code. This guide uses `C:\Users\<you>\Desktop\Code\ARES`.
-
-```powershell
-mkdir "$HOME\Desktop\Code\ARES"
-cd "$HOME\Desktop\Code\ARES"
-git clone https://github.com/NealKSharma/ARES-Dashboard.git
-cd ARES-Dashboard
-```
-
-You now have the source code in `...\ARES\ARES-Dashboard`. Every later command runs from this folder.
-
-Download the Go libraries the dashboard uses (WebSockets and serial ports):
-
-```powershell
-go mod download
-```
-
----
-
-## Part 3: Build the executable
-
-```powershell
-go build -o "Ares Dashboard.exe" .
-```
-
-This creates `Ares Dashboard.exe` in the project folder. The web page (HTML, CSS, JavaScript) is built into the exe, so the exe is the only file you need on the field laptop.
-
-**Rebuild every time you change any code**, including anything in `public/`. An old exe keeps running the old page.
-
-Optional, but worth doing before a launch: run the tests to confirm the build is healthy.
-
-```powershell
-go test ./...
-node --test Testing/browser.test.cjs
-```
-
----
-
-## Part 4: Start the dashboard
-
-1. Double-click `Ares Dashboard.exe`, or run it from PowerShell:
-
-   ```powershell
-   & ".\Ares Dashboard.exe"
+   ```cmd
+   winget install --id Git.Git -e
+   winget install --id GoLang.Go -e
    ```
 
-   A console window opens and prints `Server starting on http://127.0.0.1:8080`. **Leave this window open.** Closing it stops the dashboard.
+4. Close Command Prompt and open `cmd` again from the same folder so it picks up Git and Go. Clone the dashboard and enter its folder.
 
-2. Open a browser and go to **http://127.0.0.1:8080**.
+   ```cmd
+   git clone https://github.com/NealKSharma/ARES-Dashboard.git
+   cd ARES-Dashboard
+   ```
 
-3. The top bar shows three indicators: **Server**, **Featherweight** and **LoRa**. Server should turn green right away. The other two turn green once their receivers stream data.
+5. Download the dependencies and build the dashboard.
 
-The map needs Internet for its tiles. Everything else works offline.
+   ```cmd
+   go mod download
+   go build -o "Ares Dashboard.exe" .
+   ```
 
----
+6. In Explorer, open `ARES-Dashboard` and double-click `Ares Dashboard.exe`. Leave its terminal window open.
+7. Hold **Ctrl** and click the link printed in the terminal. If the click does nothing, paste the link into your browser.
+8. Plug the **Featherweight GPS ground station** and the **LoRa receiver** into the laptop by USB.
+9. Check the terminal for two lines like these. Your COM numbers may differ.
 
-## Part 5: Connect the receivers
+   ```text
+   Featherweight telemetry on COM3
+   LoRa altitude stream on COM4
+   ```
 
-The dashboard finds both receivers automatically. You never pick a COM port.
+   When both appear on different COM ports, the dashboard has detected both telemetry streams. You should start seeing live readings in the browser. If either line is missing, see [Check the receivers](#check-the-receivers).
 
-1. Plug in the **Featherweight GPS ground station** by USB.
-2. Plug in the **LoRa ground receiver** (the board that forwards StratoLogger altitude) by USB.
-3. Plug them in either order, before or after starting the dashboard.
+## Detailed setup
 
-Within a few seconds:
+### Install and check the tools
 
-- **Featherweight connected** turns green once a valid GPS or radio packet arrives. GPS altitude needs a 3-D fix, which can take a minute outdoors.
-- **LoRa connected** turns green once the receiver sends a steady stream of altitude numbers (at least 3 readings over 150 ms).
-- Hover over either indicator to see which COM port it is on.
+If Windows cannot find `winget`, use the [Git for Windows](https://git-scm.com/downloads/win) and [Go](https://go.dev/dl/) installers instead.
 
-If a receiver does not show up:
+Open a new Command Prompt and run `git --version` and `go version`. Both should print a version. The dashboard requires Go 1.21 or newer.
 
-- Close Arduino Serial Monitor or any other program that has the port open. Only one program can use a COM port at a time.
-- Try a different USB cable (some are charge-only) or plug directly into the laptop instead of a hub.
-- Open Device Manager and look under **Ports (COM & LPT)**. If the device is missing or shows an error, Windows cannot see it, so the dashboard cannot either.
-- Run with `--debug=all` to see every line arriving on every port (see [COMMANDS.md](COMMANDS.md)).
+### Clone, build and start
 
----
+Open Command Prompt in the folder where you want the source code. Run the clone command from Quick setup once. For later builds, open Command Prompt directly in `ARES-Dashboard`, the folder containing `go.mod`.
 
-## Part 6: Launch day checklist
+Run `go mod download`, then `go build -o "Ares Dashboard.exe" .` including the final dot. The exe contains the web page. Rebuild and restart it after changing Go code or files in `public/`.
+
+Double-click the exe and open the address it prints (normally `http://127.0.0.1:8080`). A green **Server connected** indicator means the browser can reach the dashboard. Closing the terminal stops the server. Map tiles need internet access.
+
+### Check the receivers
+
+Plug the receivers in either order. Hover over each green receiver indicator in the browser to see its COM port.
+
+| Receiver | What confirms live data |
+| --- | --- |
+| Featherweight GPS ground station | The terminal prints `Featherweight telemetry on COM…` when a valid packet arrives. GPS altitude needs a 3-D fix, which may take a minute outdoors. |
+| LoRa ground receiver | The terminal prints `LoRa altitude stream on COM…` when it detects a steady stream of altitude readings. |
+
+If a receiver is missing, open **Device Manager → Ports (COM & LPT)**. Unplug it and plug it back in to see which port appears. If no port appears, try a USB data cable directly in the laptop. If the port appears but the dashboard shows no readings, close Arduino Serial Monitor or any other program using that port. To inspect incoming data, close the dashboard and run `"Ares Dashboard.exe" --debug=all` from its folder. See [COMMANDS.md](COMMANDS.md) for other options.
+
+### Launch day checklist
 
 Do this at the pad, with the rocket powered and both receivers plugged in.
 
@@ -158,7 +97,7 @@ Do this at the pad, with the rocket powered and both receivers plugged in.
 
 ---
 
-## Part 7: Practising without a rocket
+### Practice without a rocket
 
 **Browser-only preview:** with the dashboard running, open http://127.0.0.1:8080/?simulate=1. It plays a fake flight with a LoRa dropout. Nothing gets recorded.
 
@@ -176,12 +115,12 @@ Flashing the simulator replaces whatever was on the board, so keep a copy of the
 
 ---
 
-## Quick troubleshooting
+### Troubleshooting
 
 | Problem | Fix |
 |---|---|
 | Browser shows "Connection lost" | The exe stopped. Restart it. The page reconnects every 5 seconds. |
-| Page did not change after editing code | Rebuild the exe (Part 3) and restart it. |
+| Page did not change after editing code | Rebuild the exe and restart it. |
 | `go build` fails with "cannot find module" | Run `go mod download` from the project folder. |
 | Altitude stuck at 0 with the simulator | The simulator finished its run. Replug the board. |
 | "Multiple USB ports are streaming numbers" | Two devices look like LoRa receivers. Unplug the one you do not need. |

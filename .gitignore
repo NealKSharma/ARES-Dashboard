@@ -5,6 +5,8 @@
 *.so
 *.dylib
 bin/
+*.test
+*.out
 ARES_Dashboard
 main
 

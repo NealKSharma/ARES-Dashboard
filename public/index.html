@@ -19,12 +19,13 @@
       <span class="brand-name">ARES Telemetry</span>
     </div>
     <div class="mission-status">
-      <span class="phase-badge pad-phase" id="flight-phase">PAD</span>
-      <span class="clock" id="mission-clock">00:00:00</span>
+      <span class="phase-badge" data-phase="PAD" id="flight-phase">PAD</span>
+      <span class="clock" id="mission-clock" title="Laptop time on the pad; elapsed time after detected ascent"></span>
     </div>
     <div class="links">
       <span class="link down" id="server-status"><i></i>Server offline</span>
-      <span class="link down" id="tracker-status"><i></i>Tracker offline</span>
+      <span class="link down" id="tracker-status"><i></i>Featherweight offline</span>
+      <span class="link down" id="lora-status"><i></i>LoRa offline</span>
     </div>
   </header>
 
@@ -37,7 +38,7 @@
       </div>
       
       <div class="table-row">
-        <span class="t-label">Altitude</span>
+        <span class="t-label">Altitude AGL<br><small id="alt-source">Unavailable</small></span>
         <span class="t-live"><span id="alt">--</span><small>ft</small></span>
         <span class="t-peak"><span id="max-alt">--</span><small>ft</small></span>
       </div>
@@ -63,8 +64,9 @@
 
     <div class="tactical-divider">DIAGNOSTICS</div>
     
+    <p id="source-detail" role="status">Connecting to the dashboard…</p>
     <dl class="rows diagnostics">
-      <div><dt>Signal strength</dt><dd><span id="rssi">--</span><small>%</small></dd></div>
+      <div><dt>GPS signal strength</dt><dd><span id="rssi">--</span><small>%</small></dd></div>
       <div><dt>Last packet</dt><dd id="time">--</dd></div>
       <div class="gap"><dt>Latitude</dt><dd id="lat">--</dd></div>
       <div><dt>Longitude</dt><dd id="lon">--</dd></div>
@@ -80,7 +82,11 @@
 
   <section class="panel graphs">
     <div class="graphs-head">
-      <span class="panel-title">Graphs</span>
+      <span class="panel-title" title="Live readings and graph points use half-second averages">Graphs · 0.5 s mean</span>
+      <div class="recorder" aria-label="CSV recording">
+        <strong id="recording-state">CSV status unknown</strong>
+        <small id="recording-counts" title="Receiver rows successfully written and synced to disk"></small>
+      </div>
       <div class="controls">
         <select aria-label="Telemetry graph" id="ySelect" onchange="updateGraphDropdown()">
           <option value="alt">Altitude (ft)</option>
@@ -91,7 +97,7 @@
         </select>
         <button id="addGraphBtn" onclick="createGraph()">Add graph</button>
         <button id="clearDataBtn" onclick="clearAllData()">Clear data</button>
-        <button id="tareBtn" onclick="tareAltitude()">Tare altitude</button>
+        <button id="tareBtn" disabled onclick="tareAltitude()">Tare GPS at pad</button>
       </div>
     </div>
     <div id="customGraphs"></div>

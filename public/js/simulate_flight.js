@@ -1,13 +1,6 @@
-/*
-  FLIGHT SIMULATION SCRIPT
-  Use this script to test the dashboard if the Featherweight GPS is not connected.
-  
-  Instructions:
-  1. Open the dashboard in your browser.
-  2. Open Developer Tools (F12 or Ctrl+Shift+I) and navigate to the Console tab.
-  3. Copy the entire contents of this file and paste it into the console, then press Enter.
-*/
-
+// Open /?simulate=1 to preview dual-receiver data without opening a live WebSocket.
+(() => {
+if (!simulationMode) {console.info('Open /?simulate=1 for the isolated simulator');return;}
 if (window.fakeFlight) clearInterval(window.fakeFlight);
 
 let t = 0;
@@ -75,12 +68,17 @@ window.fakeFlight = setInterval(() => {
     volt: Math.max(3500, volt).toString()
   };
 
-  if (typeof setTrackerConnected === 'function') setTrackerConnected();
-  if (typeof updateUI === 'function') updateUI(data);
-  if (typeof updateMapPosition === 'function') updateMapPosition(data);
-  if (typeof updateCustomGraphs === 'function') updateCustomGraphs(data);
-  
+  const loraLive = t < 12 || t >= 17;
+  const frame = {...data, eventID:2*t+1, received:new Date().toISOString(), gpsLive:true,
+    gpsFixFresh:true, gpsPort:'Simulated GPS', loraPort:'Simulated LoRa', gpsPad:'1000',
+    canTare:false, tareLocked:t>=5, recording:{state:'simulated'}, loraLive,
+    source:loraLive ? 'LoRa' : 'Featherweight', height:String(Math.round(alt-1000)),
+    climb:data.upvel, reason:'Simulated flight'};
+  handleReceiverEvent({...frame, packet:'GPS_STAT'});
+  if (loraLive) handleReceiverEvent({...frame,eventID:2*t+2,packet:'LORA_ALT'});
   t++;
 }, 1000);
 
 console.log("Telemetry simulation active");
+
+})();

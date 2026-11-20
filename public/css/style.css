@@ -32,7 +32,7 @@ body {
 .app {
   height: 100vh;
   display: grid;
-  grid-template-columns: 290px minmax(0, 1fr) minmax(0, 1.15fr);
+  grid-template-columns: 398px minmax(0, 1fr) minmax(0, 1.15fr);
   grid-template-rows: 48px minmax(0, 1fr) 210px;
   gap: 8px;
   padding: 8px;
@@ -93,11 +93,15 @@ body {
   color: var(--muted);
 }
 
-.phase-badge.active-phase {
-  background: var(--fire);
-  color: #fff;
-  box-shadow: 0 0 10px rgba(255, 106, 61, 0.4);
-}
+.phase-badge[data-phase="PAD"]     { background: #273548; color: #d0dfed; }
+.phase-badge[data-phase="BOOST"]   { background: #712e18; color: #ffe2ce; }
+.phase-badge[data-phase="ASCENT"]  { background: #604018; color: #ffdf93; }
+.phase-badge[data-phase="COAST"]   { background: #20456b; color: #c5e5ff; }
+.phase-badge[data-phase="APOGEE"]  { background: #55366c; color: #efd4ff; }
+.phase-badge[data-phase="DESCENT"] { background: #164956; color: #adf2fa; }
+.phase-badge[data-phase="DROGUE"]  { background: #633151; color: #ffd5ee; }
+.phase-badge[data-phase="MAIN"]    { background: #244776; color: #cddcff; }
+.phase-badge[data-phase="LANDED"]  { background: #204d34; color: #bff8ce; }
 
 .clock {
   font-family: var(--num);
@@ -147,6 +151,7 @@ body {
 
 /* Tactical Table */
 .tactical-table {
+  --reading-width: 116px;
   display: flex;
   flex-direction: column;
   margin: 0 -16px;
@@ -154,7 +159,7 @@ body {
 
 .table-header {
   display: grid;
-  grid-template-columns: 1.2fr 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) repeat(2, var(--reading-width));
   gap: 20px;
   padding: 10px 16px;
   background: #0b0f14;
@@ -167,7 +172,7 @@ body {
 
 .table-row {
   display: grid;
-  grid-template-columns: 1.2fr 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) repeat(2, var(--reading-width));
   gap: 20px;
   padding: 14px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -196,11 +201,6 @@ body {
   font-size: 17px;
   color: var(--ice);
   text-align: right;
-}
-
-.t-peak.muted {
-  color: var(--muted);
-  opacity: 0.5;
 }
 
 .t-live small, .t-peak small {
@@ -605,4 +605,24 @@ button:hover {
   .rocket-list button { flex: 1 1 40%; }
   .rocket-detail > div { padding: 12px; overflow-wrap: anywhere; }
   .controls select { max-width: 100%; }
+}
+
+.recorder { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 10px; padding: 8px 0; }
+.recorder strong { color: var(--muted); font-size: 14px; }
+.recorder [data-state="recording"] { color: var(--ok); }
+.recorder [data-state="error"] { color: var(--bad); }
+.recorder small { color: var(--muted); font: 11px var(--num); }
+.diagnostics > div { column-gap: 12px; }
+#source-detail {
+  margin: 3px 0 8px; font: 14px/1.4 var(--ui); color: var(--text); overflow-wrap: anywhere;
+}
+
+.table-header, .table-row { column-gap: 7px; }
+.t-label, .t-live, .t-peak { white-space: nowrap; }
+@media (max-width: 410px) {
+  .tactical-table { --reading-width: 91px; }
+  .table-header, .table-row { column-gap: 4px; padding-inline: 8px; }
+  .t-live, .t-peak { font-size: 16px; }
+  .t-live small, .t-peak small { margin-left: 3px; font-size: 10px; }
+  .t-label { font-size: 12px; }
 }
